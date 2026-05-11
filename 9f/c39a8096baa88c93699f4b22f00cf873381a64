@@ -1,0 +1,39 @@
+src/bist_trader_mcp/http_utils.py
+  s_e27b8ec4791d53::t_e4014466c297d7 22
+src/bist_trader_mcp/_browser.py
+  s_e27b8ec4791d53::t_9f0bea3d5465d7 145-148
+pyproject.toml
+  s_e27b8ec4791d53::t_b4397565533510 7
+src/bist_trader_mcp/tools.py
+  s_e27b8ec4791d53::t_63382ebd76cabb 422-482
+  s_e27b8ec4791d53::t_8d75386f6dd0fd 22
+scripts/smoke_test.py
+  s_e27b8ec4791d53::t_42e7df6ab2c825 190,192,194-196,198-201,203-207
+src/bist_trader_mcp/mkk.py
+  s_e27b8ec4791d53::t_0fe3883efd8d54 74-76,78-92,94-97,99-101
+  s_e27b8ec4791d53::t_0bc64dcc41f3be 165-166,168-171,173-174
+  s_e27b8ec4791d53::t_bfc896afdf674b 1,3-4,6-14,16-21,23-25,30-31,33,36-38,40,43-44,46-68,70-71,104-164,167,172,175-186,188-271,275-318,324,326-330,333-336,343-344,347-355
+src/bist_trader_mcp/server.py
+  s_e27b8ec4791d53::t_667cfefea1f02b 21
+  s_e27b8ec4791d53::t_c1e925296054ed 170-172,184-197
+  s_e27b8ec4791d53::t_0ca45ffa533ca4 453-458
+README.md
+  s_e27b8ec4791d53::t_2ab48b0bfd5b8a 40-41
+  s_e27b8ec4791d53::t_dd71a558de1e3d 62,70-72
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.4",
+  "base_commit_sha": "9fc39a8096baa88c93699f4b22f00cf873381a64",
+  "prompts": {},
+  "sessions": {
+    "s_e27b8ec4791d53": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b04f6f92-91ee-443e-aba8-cd0b15e08ac8",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Enes Parlak <eparlak996@gmail.com>"
+    }
+  }
+}
