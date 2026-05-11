@@ -1,0 +1,82 @@
+//@version=6
+// =============================================================================
+// TR Basis Monitor — plots VIOP futures vs spot cost-of-carry fair value with
+// a Z-score band, flagging arbitrage candidates.
+//
+// Placeholders filled by the MCP at generation time:
+//   {{UNDERLYING_SYMBOL}}   — spot symbol on TradingView (e.g. "BIST:XU030")
+//   {{FUTURES_SYMBOL}}      — futures symbol on TradingView (e.g. "BIST:F_XU0300625")
+//   {{RISK_FREE_PCT}}       — annualised risk-free (DİBS yield for maturity)
+//   {{DIVIDEND_YIELD_PCT}}  — annualised dividend yield (0 for non-dividend)
+//   {{DAYS_TO_EXPIRY}}      — integer days, used at script load time
+//   {{Z_LOOKBACK}}          — bars to compute basis Z-score over (default 60)
+//   {{Z_THRESHOLD}}         — absolute Z above which to alert (default 2.0)
+//   {{AS_OF_DATE}}          — YYYY-MM-DD snapshot
+// =============================================================================
+indicator("TR Basis Monitor (snapshot {{AS_OF_DATE}})", overlay = false)
+
+// --- Snapshot constants ------------------------------------------------------
+rfPct        = {{RISK_FREE_PCT}}
+divPct       = {{DIVIDEND_YIELD_PCT}}
+daysToExpiry = {{DAYS_TO_EXPIRY}}
+zLookback    = {{Z_LOOKBACK}}
+zThreshold   = {{Z_THRESHOLD}}
+
+// --- Pull spot + futures series ---------------------------------------------
+spot    = request.security("{{UNDERLYING_SYMBOL}}", timeframe.period, close)
+futures = request.security("{{FUTURES_SYMBOL}}",    timeframe.period, close)
+
+// --- Time-decaying days-to-expiry estimate ----------------------------------
+// We use the snapshot DTE at compile time then decay roughly with each daily
+// bar. Precision isn't critical — we're inside a Z-score lens.
+barDaysApprox = math.floor((time - time[1]) / 86400000)
+dteDynamic    = math.max(daysToExpiry - barDaysApprox * (bar_index - bar_index[zLookback]), 1)
+t             = dteDynamic / 365.0
+
+// --- Cost-of-carry fair value -----------------------------------------------
+fair = spot * math.exp((rfPct/100.0 - divPct/100.0) * t)
+basis        = futures - spot
+basisBps     = (basis / spot) * 10000.0
+deviation    = futures - fair
+deviationBps = (deviation / fair) * 10000.0
+
+// --- Z-score of deviation ---------------------------------------------------
+mean = ta.sma(deviationBps, zLookback)
+sd   = ta.stdev(deviationBps, zLookback)
+z    = sd > 0 ? (deviationBps - mean) / sd : 0.0
+
+// --- Plots ------------------------------------------------------------------
+plot(basisBps,    title = "Basis (bps)",     color = color.blue)
+plot(deviationBps, title = "Fair-deviation (bps)", color = color.orange, linewidth = 2)
+hline(0,  title = "Zero line", color = color.gray, linestyle = hline.style_dashed)
+
+// --- Z-band shading ---------------------------------------------------------
+upperBand = mean + zThreshold * sd
+lowerBand = mean - zThreshold * sd
+p1 = plot(upperBand, title = "+Z band", color = color.new(color.red, 70))
+p2 = plot(lowerBand, title = "-Z band", color = color.new(color.green, 70))
+fill(p1, p2, color = color.new(color.gray, 92))
+
+// --- Signal markers + alerts ------------------------------------------------
+richSignal  = z > zThreshold
+cheapSignal = z < -zThreshold
+
+plotshape(richSignal,  title = "Futures RICH",  location = location.top,    style = shape.triangledown, color = color.red,   size = size.tiny)
+plotshape(cheapSignal, title = "Futures CHEAP", location = location.bottom, style = shape.triangleup,   color = color.green, size = size.tiny)
+
+alertcondition(richSignal,  title = "Futures rich vs fair (z > threshold)",  message = "TR Basis Monitor: futures rich on " + syminfo.ticker)
+alertcondition(cheapSignal, title = "Futures cheap vs fair (z < -threshold)", message = "TR Basis Monitor: futures cheap on " + syminfo.ticker)
+
+// --- Status table -----------------------------------------------------------
+var table info = table.new(position.top_left, 2, 5, border_width = 1)
+if barstate.islast
+    table.cell(info, 0, 0, "TR Basis Monitor", text_color = color.white, bgcolor = color.new(color.gray, 30))
+    table.cell(info, 1, 0, "{{AS_OF_DATE}}",   text_color = color.white, bgcolor = color.new(color.gray, 30))
+    table.cell(info, 0, 1, "Spot",     text_color = color.white)
+    table.cell(info, 1, 1, str.tostring(spot, "#.##"), text_color = color.white)
+    table.cell(info, 0, 2, "Futures",  text_color = color.white)
+    table.cell(info, 1, 2, str.tostring(futures, "#.##"), text_color = color.white)
+    table.cell(info, 0, 3, "Fair",     text_color = color.white)
+    table.cell(info, 1, 3, str.tostring(fair, "#.##"), text_color = color.white)
+    table.cell(info, 0, 4, "Z",        text_color = color.white)
+    table.cell(info, 1, 4, str.tostring(z, "#.##"), text_color = color.white)
