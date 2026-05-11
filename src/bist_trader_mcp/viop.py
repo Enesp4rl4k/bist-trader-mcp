@@ -152,10 +152,14 @@ async def fetch_daily_settlement(
 ) -> list[VIOPSettlement]:
     """Fetch all VIOP contract settlement rows for a single trade date.
 
-    v0.2 STATUS: Borsa İstanbul publishes VIOP bulletins behind a
-    session-bound UI and returns 404 for direct JSON access on the URL
-    patterns observed. Endpoint discovery is tracked for v0.3. The
-    contract-code parser and settlement dataclasses are ready.
+    v0.1.1 STATUS: discovery completed 2026-05-11. BIST exposes a
+    REST datastore at https://datastore.borsaistanbul.com/api/ with
+    category code `VIOP` / `VIPB`, but the underlying product-types are
+    paid subscriptions ("Aboneliği"). The free EOD daily bulletin is
+    published as a downloadable Excel / CSV instead. Path forward (v0.3):
+    locate + parse the public daily bulletin file (probably at
+    `https://www.borsaistanbul.com/data/...` with a date-based filename),
+    or add a datastore-subscription adapter for power users.
     """
     raise wip_error(
         "viop",
