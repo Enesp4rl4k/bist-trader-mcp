@@ -17,6 +17,8 @@ from bist_trader_mcp.kap import _looks_material, _normalize_publish_date, _parse
 from bist_trader_mcp.mkk import _detect_row_id
 from bist_trader_mcp.mkk import _parse_pdf_text as parse_mkk_pdf
 from bist_trader_mcp.takasbank import _to_int, _to_number
+from bist_trader_mcp.viop import _parse_html as parse_viop_html
+from bist_trader_mcp.viop import parse_contract_code
 
 # ---------------------------------------------------------------------------
 # Hazine — quarterly DİBS auction calendar PDF
@@ -210,3 +212,90 @@ def test_kap_parse_full_row():
 
 def test_kap_parse_handles_missing_basic():
     assert _parse({"other": "noise"}) is None
+
+
+# ---------------------------------------------------------------------------
+# VIOP — İş Yatırım contract snapshot HTML
+# ---------------------------------------------------------------------------
+
+
+# Trimmed-down fixture matching the live İş Yatırım VIOP table structure
+# (3 representative rows: future, future with letters in underlying, and
+# an option). Anything outside <tr title-bearing td>… should be ignored.
+VIOP_FIXTURE = """\
+<html><body><table>
+<tr>
+  <td title="F_CIMSA0626 | CIMSA Haziran 2026 Vadeli">CIMSA Haziran 2026 Vadeli</td>
+  <td>60,1700</td><td>-1,55</td><td>-0,9500</td>
+  <td>3.932.186</td><td>646</td>
+</tr>
+<tr>
+  <td title="F_USD0626 | USD Haziran 2026 Vadeli">USD Haziran 2026 Vadeli</td>
+  <td>45,2700</td><td>0,12</td><td>0,0500</td>
+  <td>121.456.789</td><td>27.418</td>
+</tr>
+<tr>
+  <td title="O_XU0300625_C18000 | BIST30 Haziran 2026 Call 18000">
+    BIST30 Haz 26 Call 18000
+  </td>
+  <td>120,0000</td><td>2,50</td><td>3,0000</td>
+  <td>950.000</td><td>140</td>
+</tr>
+<tr><td>not a contract row</td></tr>
+</table></body></html>
+"""
+
+
+def test_viop_parser_parses_future_rows():
+    rows = parse_viop_html(VIOP_FIXTURE, trade_date="2026-05-11")
+    assert len(rows) == 3
+    cimsa = rows[0]
+    assert cimsa.contract.contract_code == "F_CIMSA0626"
+    assert cimsa.contract.underlying == "CIMSA"
+    assert cimsa.contract.contract_type == "future"
+    assert cimsa.contract.expiry_year == 2026
+    assert cimsa.contract.expiry_month == 6
+    assert cimsa.last_price == 60.17
+    assert cimsa.percent_change == -1.55
+    assert cimsa.absolute_change == -0.95
+    assert cimsa.volume_tl == 3_932_186.0
+    assert cimsa.open_interest == 646
+
+
+def test_viop_parser_handles_turkish_number_format():
+    rows = parse_viop_html(VIOP_FIXTURE, trade_date="2026-05-11")
+    usd = rows[1]
+    assert usd.last_price == 45.27
+    assert usd.open_interest == 27_418  # "27.418" → 27418
+
+
+def test_viop_parser_extracts_option_strike_and_right():
+    rows = parse_viop_html(VIOP_FIXTURE, trade_date="2026-05-11")
+    opt = rows[2]
+    assert opt.contract.contract_type == "option"
+    assert opt.contract.option_right == "C"
+    assert opt.contract.option_strike == 18000.0
+    assert opt.contract.underlying == "XU030"
+
+
+def test_viop_parser_skips_non_contract_rows():
+    rows = parse_viop_html(VIOP_FIXTURE, trade_date="2026-05-11")
+    codes = [r.contract.contract_code for r in rows]
+    assert "F_CIMSA0626" in codes
+    # 4th tr in fixture has no title — must be excluded.
+    assert all(c.startswith(("F_", "O_")) for c in codes)
+
+
+def test_viop_contract_code_parser_future():
+    c = parse_contract_code("F_XU0300625")
+    assert c.contract_type == "future"
+    assert c.underlying == "XU030"
+    assert c.expiry_year == 2025
+    assert c.expiry_month == 6
+
+
+def test_viop_contract_code_parser_option():
+    c = parse_contract_code("O_XU0300625_C18000")
+    assert c.contract_type == "option"
+    assert c.option_right == "C"
+    assert c.option_strike == 18000.0

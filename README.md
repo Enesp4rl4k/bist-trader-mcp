@@ -42,10 +42,10 @@ Tek cümle: **"TR finans verisini topla, Claude ile analiz et, sonucu TradingVie
 
 ### Türev — VIOP & Takasbank
 - ✅ `get_viop_dashboard` — **marketwide margin call + volume + OI** snapshot from Takasbank (Playwright + stealth + 6h cache to respect F5 WAF rate limits)
-- 🚧 `get_viop_settlement` — per-contract günlük settle (v0.3, free bulletin discovery)
-- 🚧 `get_viop_term_structure` — futures vade eğrisi (v0.3)
-- 🚧 `get_viop_margin_parameters` — per-contract SPAN parameters (v0.3, file pipeline)
-- 🚧 `get_viop_margin_call_alerts` — per-contract teminat oranı %5+ değişenler (v0.3)
+- ✅ `get_viop_settlement` — **live per-contract snapshot** (last price, % change, volume TL, OI) for all 480+ VIOP futures + options. Source: İş Yatırım viop.aspx + 1h cache.
+- ✅ `get_viop_term_structure` — futures vade eğrisi (contango / backwardation, basis hesabı için)
+- 🚧 `get_viop_margin_parameters` — per-contract SPAN parameters (v0.4, separate file pipeline)
+- 🚧 `get_viop_margin_call_alerts` — per-contract teminat oranı %5+ değişenler (v0.4)
 - ✅ `calculate_option_greeks` — Black-Scholes Δ Γ Θ Vega ρ (TR-distressed IV brackets)
 - ✅ `calculate_implied_volatility` — piyasa fiyatından IV solver
 
@@ -58,10 +58,10 @@ Tek cümle: **"TR finans verisini topla, Claude ile analiz et, sonucu TradingVie
 
 ### Test durumu
 ```
-pytest:        37 / 37 PASSED   (5 bond_math + 7 options_math
-                                + 17 parser unit tests + 8 cache tests)
+pytest:        43 / 43 PASSED   (5 bond_math + 7 options_math
+                                + 25 parser unit tests + 6 cache tests)
 ruff lint:     clean
-live smoke:    6 live / 1 WIP / 0 unexpected-fail
+live smoke:    7 live / 0 WIP / 0 unexpected-fail  ← FULL SWEEP
                  - yahoo_bist_eod:        BIST EOD bars
                  - evds:                  TCMB policy + TLREF + CPI YoY
                  - kap:                   disclosures via Playwright XHR
@@ -71,7 +71,8 @@ live smoke:    6 live / 1 WIP / 0 unexpected-fail
                                           (quarterly PDF + pdfplumber + 24h cache)
                  - mkk market stats:      monthly investor stats time series
                                           (PDF + pdfplumber + 24h cache, 18 rows)
-                 - viop per-contract:     WIP — v0.3
+                 - viop snapshot:         480+ live contracts (futures + options)
+                                          (İş Yatırım scrape + 1h cache)
 ```
 
 Live smoke: `python scripts/smoke_test.py` (UTF-8 stdout için `PYTHONIOENCODING=utf-8`).

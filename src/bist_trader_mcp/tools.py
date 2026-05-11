@@ -310,7 +310,18 @@ async def get_viop_settlement(
     trade_date: str | None = None,
     underlying: str | None = None,
 ) -> dict[str, Any]:
-    """All VIOP contract settlement rows for one trade date (with optional underlying filter)."""
+    """Live VIOP contract snapshot — last price, % change, volume, OI.
+
+    Source: İş Yatırım's public viop.aspx page (no auth, no WAF). All
+    actively trading futures and options are returned in a single call;
+    use the optional `underlying` filter (e.g. "XU030", "USD") to slice.
+
+    Note: Settlement prices in the strict Takasbank EOD sense are NOT
+    exposed here — last_price + % change + volume + OI are. For the
+    marketwide aggregate margin / volume / OI dashboard use
+    `get_viop_dashboard`. For per-contract official end-of-day settle
+    prices, v0.3 will add a Takasbank-overnight pipeline.
+    """
     try:
         rows = await fetch_daily_settlement(
             trade_date=trade_date, underlying_filter=underlying
@@ -321,7 +332,7 @@ async def get_viop_settlement(
         return {"error": "viop_error", "detail": str(e)}
 
     return {
-        "source": "Borsa İstanbul — VIOP daily bulletin",
+        "source": "İş Yatırım — viop.aspx live contract snapshot",
         "trade_date": rows[0].trade_date if rows else trade_date,
         "underlying_filter": underlying,
         "count": len(rows),
@@ -334,12 +345,12 @@ async def get_viop_settlement(
                 "expiry_month": r.contract.expiry_month,
                 "option_strike": r.contract.option_strike,
                 "option_right": r.contract.option_right,
-                "settle_price": r.settle_price,
-                "reference_price": r.reference_price,
+                "name": r.name,
+                "last_price": r.last_price,
+                "percent_change": r.percent_change,
+                "absolute_change": r.absolute_change,
+                "volume_tl": r.volume_tl,
                 "open_interest": r.open_interest,
-                "volume": r.volume,
-                "high": r.high,
-                "low": r.low,
             }
             for r in rows
         ],
@@ -359,7 +370,7 @@ async def get_viop_term_structure(
         return {"error": "viop_error", "detail": str(e)}
 
     return {
-        "source": "Borsa İstanbul — VIOP daily bulletin (futures only)",
+        "source": "İş Yatırım — viop.aspx (futures only)",
         "underlying": underlying,
         "as_of": rows[0].trade_date if rows else as_of,
         "count": len(rows),
@@ -368,16 +379,19 @@ async def get_viop_term_structure(
                 "contract_code": r.contract.contract_code,
                 "expiry_year": r.contract.expiry_year,
                 "expiry_month": r.contract.expiry_month,
-                "settle_price": r.settle_price,
+                "last_price": r.last_price,
+                "percent_change": r.percent_change,
+                "absolute_change": r.absolute_change,
+                "volume_tl": r.volume_tl,
                 "open_interest": r.open_interest,
-                "volume": r.volume,
             }
             for r in rows
         ],
         "notes": (
-            "Adjacent-month basis can be inferred from settle prices. For a "
+            "Adjacent-month basis can be inferred from last_price. For a "
             "spot/futures basis or fair-value calculation, combine with "
-            "get_yield_curve and a spot data source."
+            "get_yield_curve and a spot data source via "
+            "calculate_basis_fair_value."
         ),
     }
 

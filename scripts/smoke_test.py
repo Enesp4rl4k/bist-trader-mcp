@@ -92,33 +92,25 @@ async def test_kap() -> bool | None:
 
 
 async def test_viop() -> bool | None:
-    banner("Borsa Istanbul VIOP - daily settlement")
+    banner("VIOP - live contract snapshot (İş Yatırım)")
     try:
         from bist_trader_mcp.viop import fetch_daily_settlement
 
-        rows = await fetch_daily_settlement(
-            trade_date=date.today() - timedelta(days=1)
-        )
+        rows = await fetch_daily_settlement(use_cache=True)
         if not rows:
-            warn("0 rows (could be a holiday or endpoint drift)")
+            warn("0 rows (İş Yatırım page returned empty)")
             return False
-        ok(f"received {len(rows)} contract rows")
-        # Show one future and one option if present
+        n_fut = sum(1 for r in rows if r.contract.contract_type == "future")
+        n_opt = sum(1 for r in rows if r.contract.contract_type == "option")
+        ok(f"{len(rows)} contracts ({n_fut} futures, {n_opt} options)")
         sample_fut = next(
             (r for r in rows if r.contract.contract_type == "future"), None
         )
-        sample_opt = next(
-            (r for r in rows if r.contract.contract_type == "option"), None
-        )
         if sample_fut:
             info(
-                f"future: {sample_fut.contract.contract_code} "
-                f"settle={sample_fut.settle_price} OI={sample_fut.open_interest}"
-            )
-        if sample_opt:
-            info(
-                f"option: {sample_opt.contract.contract_code} "
-                f"settle={sample_opt.settle_price} OI={sample_opt.open_interest}"
+                f"sample: {sample_fut.contract.contract_code} "
+                f"px={sample_fut.last_price} chg%={sample_fut.percent_change} "
+                f"OI={sample_fut.open_interest}"
             )
         return True
     except Exception as e:
