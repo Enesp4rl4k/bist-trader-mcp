@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "bist-trader-mcp"
-version = "0.2.0"
+version = "0.2.1"
 description = "BIST Trader MCP — TR finance MCP server: TCMB EVDS, BIST EOD, KAP, VIOP, options math, Pine v6 recipes. Companion to tradesdontlie/tradingview-mcp."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -80,6 +80,12 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "N"]
+
+# Test fixtures that mirror real upstream document formats (PDF rows
+# with 12 monthly columns) are intentionally wider than the project's
+# normal line-length budget.
+[tool.ruff.lint.per-file-ignores]
+"tests/test_parsers.py" = ["E501"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

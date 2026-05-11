@@ -22,7 +22,6 @@ from typing import Any
 
 from .http_utils import SourceError
 
-
 WIP_DOCS_URL = (
     "https://github.com/Enesp4rl4k/bist-trader-mcp/issues "
     "(endpoint-discovery label)"

@@ -13,9 +13,6 @@ import os
 import sys
 import traceback
 from datetime import date, timedelta
-from typing import Any
-
-from bist_trader_mcp.http_utils import SourceError
 
 
 def banner(title: str) -> None:
@@ -162,7 +159,6 @@ async def test_takasbank() -> bool | None:
 async def test_hazine() -> bool | None:
     banner("Hazine - DİBS auction calendar")
     try:
-        from datetime import date as _date
         from bist_trader_mcp.hazine import fetch_auctions
 
         # Use the Tr01 PDF's calendar window so the smoke runs regardless
@@ -234,7 +230,10 @@ async def test_evds() -> bool | None:
             return False
         latest = next((o for o in reversed(obs) if o.value is not None), None)
         if latest:
-            ok(f"received {len(obs)} observations; latest 1w repo = {latest.value}% on {latest.date}")
+            ok(
+                f"received {len(obs)} observations; "
+                f"latest 1w repo = {latest.value}% on {latest.date}"
+            )
         else:
             warn(f"received {len(obs)} observations but all values null")
         return True

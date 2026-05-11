@@ -36,7 +36,6 @@ import httpx
 from ._cache import cache_get, cache_set
 from .http_utils import USER_AGENT, SourceError
 
-
 # v0.1 registry — append the latest known strategy URL on each release.
 # Indexed by the calendar starting month so we can pick the most recent
 # document covering the user's date window.

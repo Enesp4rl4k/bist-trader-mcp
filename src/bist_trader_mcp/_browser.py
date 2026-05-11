@@ -92,9 +92,10 @@ async def call_json_xhr(
     body: dict[str, Any] | None = None,
     accept_language: str = "tr,en;q=0.7",
     extra_headers: dict[str, str] | None = None,
-    wait_after_nav_ms: int = 1500,
+    wait_after_nav_ms: int = 4000,
     nav_timeout_ms: int = _DEFAULT_NAV_TIMEOUT_MS,
     call_timeout_ms: int = _DEFAULT_CALL_TIMEOUT_MS,
+    retries: int = 2,
 ) -> Any:
     """Visit `page_url` in a headless browser, then issue an in-page fetch()
     to `api_url` so the request inherits the session and origin.
@@ -109,9 +110,13 @@ async def call_json_xhr(
         body: Optional JSON body for POST.
         accept_language: Accept-Language header value.
         extra_headers: Optional extra headers merged into the fetch.
-        wait_after_nav_ms: ms to idle after the page reaches networkidle, to
-            let any deferred state load.
+        wait_after_nav_ms: ms to idle after navigation before issuing the
+            in-page fetch. Default 4 s — KAP needs the WAF anti-bot
+            cookie chain to settle, which takes ~3-4 s in practice.
         nav_timeout_ms / call_timeout_ms: timeouts in ms.
+        retries: how many additional fetch attempts to make inside the
+            same page session when the first fetch returns a transient
+            "Failed to fetch" or empty body (each retry waits 2 s).
     """
     try:
         from playwright.async_api import async_playwright
@@ -133,6 +138,19 @@ async def call_json_xhr(
     if body is not None:
         fetch_init["body"] = json.dumps(body, ensure_ascii=False)
 
+    # Strategy: do EVERYTHING inside the same Playwright context.
+    # 1) Navigate to page_url so the WAF challenge plants its cookies.
+    # 2) Use `context.request.post()` to call the API — this reuses the
+    #    browser's TLS fingerprint + cookies + redirects but is HTTP-
+    #    level (not subject to page.evaluate quirks).
+    # The earlier approaches failed non-deterministically: the in-page
+    # `fetch()` was intercepted by KAP's JS challenge, and the
+    # browser-harvested cookies replayed via httpx hit a TLS-binding
+    # check (KAP appears to validate JA3 fingerprint).
+    body_text = ""
+    status = 0
+    last_err: str | None = None
+
     try:
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
@@ -142,25 +160,35 @@ async def call_json_xhr(
                     extra_http_headers={"Accept-Language": accept_language},
                 )
                 page = await ctx.new_page()
-                # `domcontentloaded` is more reliable than `networkidle`
-                # for sites with continuous analytics chatter (KAP keeps
-                # firing trackers indefinitely, so networkidle never hits).
-                await page.goto(page_url, wait_until="domcontentloaded", timeout=nav_timeout_ms)
+                await page.goto(page_url, wait_until="load", timeout=nav_timeout_ms)
                 if wait_after_nav_ms > 0:
                     await page.wait_for_timeout(wait_after_nav_ms)
 
-                # Drive an in-page fetch — this inherits cookies + origin so
-                # the WAF sees a normal same-origin XHR.
-                js = """
-                  async ({url, init}) => {
-                    const r = await fetch(url, init);
-                    const text = await r.text();
-                    return { status: r.status, body: text };
-                  }
-                """
-                result: dict[str, Any] = await page.evaluate(
-                    js, {"url": api_url, "init": fetch_init}
-                )
+                # Use APIRequestContext bound to the browser context.
+                for attempt in range(retries + 1):
+                    try:
+                        if method.upper() == "GET":
+                            resp = await ctx.request.get(
+                                api_url,
+                                headers=headers,
+                                timeout=call_timeout_ms,
+                            )
+                        else:
+                            resp = await ctx.request.post(
+                                api_url,
+                                headers=headers,
+                                data=fetch_init.get("body"),
+                                timeout=call_timeout_ms,
+                            )
+                        status = resp.status
+                        body_text = await resp.text()
+                        if status < 400 and body_text:
+                            break
+                        last_err = f"HTTP {status}: {body_text[:200]}"
+                    except Exception as inner_exc:
+                        last_err = f"{type(inner_exc).__name__}: {inner_exc}"
+                    if attempt < retries:
+                        await page.wait_for_timeout(2000)
             finally:
                 await browser.close()
     except BrowserCallError:
@@ -170,18 +198,16 @@ async def call_json_xhr(
             f"browser session failed: {type(e).__name__}: {e}"
         ) from e
 
-    status = int(result.get("status", 0))
-    body_text = str(result.get("body", ""))
-    if status >= 400 or not body_text:
+    if not body_text or status >= 400:
         raise BrowserCallError(
-            f"upstream {status} for {api_url} — snippet: {body_text[:200]}"
+            f"upstream {status} for {api_url} after {retries + 1} attempts: {last_err}"
         )
     try:
         return json.loads(body_text)
-    except json.JSONDecodeError as e:
+    except json.JSONDecodeError as exc:
         raise BrowserCallError(
-            f"non-JSON response from {api_url}: {e}; snippet: {body_text[:200]}"
-        ) from e
+            f"non-JSON response from {api_url}: {exc}; snippet: {body_text[:200]}"
+        ) from exc
 
 
 async def extract_page_data(
@@ -270,8 +296,9 @@ async def extract_page_data(
                         wait_for_selector, timeout=nav_timeout_ms,
                     )
                 elif wait_for_text:
+                    needle = json.dumps(wait_for_text)
                     await page.wait_for_function(
-                        f"() => document.body && document.body.innerText.includes({json.dumps(wait_for_text)})",
+                        f"() => document.body && document.body.innerText.includes({needle})",
                         timeout=nav_timeout_ms,
                     )
                 elif wait_after_nav_ms > 0:

@@ -58,7 +58,9 @@ Tek cümle: **"TR finans verisini topla, Claude ile analiz et, sonucu TradingVie
 
 ### Test durumu
 ```
-pytest:        12 / 12 PASSED   (bond_math 5/5 + options_math 7/7)
+pytest:        37 / 37 PASSED   (5 bond_math + 7 options_math
+                                + 17 parser unit tests + 8 cache tests)
+ruff lint:     clean
 live smoke:    6 live / 1 WIP / 0 unexpected-fail
                  - yahoo_bist_eod:        BIST EOD bars
                  - evds:                  TCMB policy + TLREF + CPI YoY

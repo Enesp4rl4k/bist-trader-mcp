@@ -34,7 +34,7 @@ def _phi(x: float) -> float:
     return math.exp(-0.5 * x * x) / math.sqrt(2 * math.pi)
 
 
-def _N(x: float) -> float:
+def _N(x: float) -> float:  # noqa: N802 — N is the canonical math name for Φ(x)
     """Standard-normal cdf via the error function."""
     return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
 

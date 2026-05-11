@@ -39,7 +39,6 @@ from ._cache import cache_get, cache_set
 from ._wip import wip_error
 from .http_utils import USER_AGENT, SourceError
 
-
 MKK_STATS_PDF_BASE = "https://www.mkk.com.tr/sites/default/files"
 DEFAULT_CACHE_TTL_SECONDS = 24 * 3600
 

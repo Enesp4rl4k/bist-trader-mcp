@@ -375,7 +375,10 @@ TOOL_DEFS: list[Tool] = [
                 "name": {"type": "string", "description": "Recipe name, e.g. 'tr_macro_backdrop'"},
                 "data": {
                     "type": "object",
-                    "description": "Placeholder overrides (keys map to {{TOKEN}}s in the template).",
+                    "description": (
+                        "Placeholder overrides (keys map to "
+                        "{{TOKEN}}s in the template)."
+                    ),
                 },
                 "auto_fetch": {
                     "type": "boolean",

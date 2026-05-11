@@ -27,16 +27,25 @@ Install requirement:
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any
 
 from ._browser import BrowserCallError, call_json_xhr, playwright_available
+from ._cache import cache_get, cache_set
 from ._wip import wip_error
 from .http_utils import SourceError
 
 KAP_API_URL = "https://www.kap.org.tr/tr/api/disclosure/list/main"
 KAP_PAGE_URL = "https://www.kap.org.tr/tr"
+
+# KAP's WAF aggressively rate-limits per-IP browser sessions. Disclosures
+# update through the day but most LLM queries repeat the same window
+# (e.g. "last 7 days"), so we cache each unique (date-range, ticker,
+# only_material) call. 5 min is short enough to keep "what just got
+# published?" queries fresh while shielding the WAF from rapid retries.
+KAP_DEFAULT_CACHE_TTL_SECONDS = 5 * 60
 
 # Substring filters used by the (rough) materiality heuristic. KAP itself
 # does not flag rows as material; we approximate by subject keyword.
@@ -149,6 +158,8 @@ async def fetch_disclosures(
     until: date | str | None = None,
     only_material: bool = False,
     limit: int = 100,
+    use_cache: bool = True,
+    cache_ttl_seconds: int = KAP_DEFAULT_CACHE_TTL_SECONDS,
 ) -> list[KAPDisclosure]:
     """Pull KAP disclosures within a date window.
 
@@ -159,6 +170,8 @@ async def fetch_disclosures(
         only_material: If True, keep entries whose subject matches a
             keyword from the heuristic material list.
         limit: Max rows after filtering (hard cap 500).
+        use_cache: Serve from disk cache when fresh (default 5 min TTL).
+        cache_ttl_seconds: Cache lifetime in seconds.
     """
     if not playwright_available():
         raise wip_error(
@@ -178,22 +191,43 @@ async def fetch_disclosures(
         "memberTypes": ["IGS", "DDK"],
     }
     if ticker:
-        # KAP supports a `stockCodes` filter (comma-separated list).
         body["stockCodes"] = ticker.upper().strip()
 
-    try:
-        payload = await call_json_xhr(
-            api_url=KAP_API_URL,
-            page_url=KAP_PAGE_URL,
-            method="POST",
-            body=body,
-            extra_headers={"Referer": KAP_PAGE_URL, "Origin": "https://www.kap.org.tr"},
-        )
-    except BrowserCallError as e:
-        raise SourceError("kap", str(e)) from e
+    # Cache key covers the API request shape — same request → same cache.
+    # Post-filter args (only_material, limit) are applied AFTER cache.
+    cache_key = f"kap.disclosures:{json.dumps(body, sort_keys=True)}"
 
-    if not isinstance(payload, list):
-        raise SourceError("kap", f"unexpected payload shape: {type(payload)}")
+    payload: Any = None
+    if use_cache:
+        cached = cache_get(cache_key, ttl_seconds=cache_ttl_seconds)
+        if isinstance(cached, list):
+            payload = cached
+
+    if payload is None:
+        try:
+            payload = await call_json_xhr(
+                api_url=KAP_API_URL,
+                page_url=KAP_PAGE_URL,
+                method="POST",
+                body=body,
+                extra_headers={"Referer": KAP_PAGE_URL, "Origin": "https://www.kap.org.tr"},
+                wait_after_nav_ms=6_000,
+            )
+        except BrowserCallError as e:
+            # Graceful degradation: if KAP's WAF rate-limited us this
+            # minute but we have a stale cache entry (TTL expired but
+            # file still around), serve the stale data rather than
+            # failing the user's query. Yesterday's disclosures are
+            # almost always more useful than no disclosures.
+            stale = cache_get(cache_key, ttl_seconds=24 * 3600)
+            if isinstance(stale, list):
+                payload = stale
+            else:
+                raise SourceError("kap", str(e)) from e
+
+        if not isinstance(payload, list):
+            raise SourceError("kap", f"unexpected payload shape: {type(payload)}")
+        cache_set(cache_key, payload, ttl_seconds=cache_ttl_seconds)
 
     parsed = [_parse(r) for r in payload if isinstance(r, dict)]
     out = [d for d in parsed if d is not None]

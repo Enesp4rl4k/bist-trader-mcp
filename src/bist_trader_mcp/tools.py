@@ -7,10 +7,9 @@ them instead of receiving an opaque exception.
 
 from __future__ import annotations
 
+import math
 from datetime import date, timedelta
 from typing import Any
-
-import math
 
 from ._wip import wip_payload
 from .bist_eod import fetch_eod_ohlcv
