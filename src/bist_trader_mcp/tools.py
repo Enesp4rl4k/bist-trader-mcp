@@ -28,7 +28,11 @@ from .series_catalog import (
     POLICY_RATE_SERIES,
     list_known_series,
 )
-from .takasbank import fetch_margin_change_alerts, fetch_margin_parameters
+from .takasbank import (
+    fetch_margin_change_alerts,
+    fetch_margin_parameters,
+    fetch_viop_margin_snapshot,
+)
 from .viop import fetch_daily_settlement, fetch_term_structure
 
 
@@ -627,6 +631,82 @@ async def get_viop_margin_call_alerts(
             "or short positions in these contracts may face margin calls "
             "today. Cross-check with get_viop_settlement to see if a price "
             "move (rather than vol regime change) drove the tightening."
+        ),
+    }
+
+
+async def get_viop_dashboard(
+    use_cache: bool = True,
+    cache_ttl_seconds: int = 6 * 3600,
+) -> dict[str, Any]:
+    """Marketwide VIOP aggregate margin snapshot from Takasbank dashboard.
+
+    Returns the same 5 numbers a trader sees on the live Takasbank
+    statistics page:
+        - margined_account_count
+        - transaction_margin_total      (TL)
+        - guarantee_fund_margin_total   (TL)
+        - margin_call_total             (TL)  ← marketwide stress signal
+        - required_margin_total         (TL)
+
+    Cache: file-backed, default 6h TTL. Override with use_cache=false
+    to force a live fetch (will hit Takasbank's WAF; use sparingly).
+    """
+    try:
+        snap = await fetch_viop_margin_snapshot(
+            use_cache=use_cache, cache_ttl_seconds=cache_ttl_seconds
+        )
+    except SourceError as e:
+        if "endpoint discovery pending" in str(e):
+            return wip_payload("takasbank", str(e))
+        return {"error": "takasbank_error", "detail": str(e)}
+
+    # Derived health ratio: how much of the required margin is currently
+    # in margin-call status. A spike here = brokers are pulling money in.
+    call_ratio_pct = None
+    if snap.required_margin_total and snap.margin_call_total is not None:
+        call_ratio_pct = (snap.margin_call_total / snap.required_margin_total) * 100.0
+
+    # Total cash + non-cash margin posted, if both halves came through.
+    def _sum_compound(d: dict[str, float | None] | None) -> float | None:
+        if not d:
+            return None
+        vals = [v for v in d.values() if isinstance(v, int | float)]
+        return float(sum(vals)) if vals else None
+
+    transaction_margin_total = _sum_compound(snap.transaction_margin)
+    guarantee_fund_total = _sum_compound(snap.guarantee_fund_margin)
+
+    return {
+        "source": "Takasbank — VIOP marketwide aggregate dashboard",
+        "as_of": snap.as_of,
+        "snapshot": {
+            "margined_account_count": snap.margined_account_count,
+            "margined_account_bireysel": snap.margined_account_bireysel,
+            "margined_account_kurumsal": snap.margined_account_kurumsal,
+            "transaction_margin_tl": snap.transaction_margin,
+            "transaction_margin_total_tl": transaction_margin_total,
+            "guarantee_fund_margin_tl": snap.guarantee_fund_margin,
+            "guarantee_fund_total_tl": guarantee_fund_total,
+            "margin_call_total_tl": snap.margin_call_total,
+            "required_margin_total_tl": snap.required_margin_total,
+            "margin_call_to_required_pct": call_ratio_pct,
+            "profit_loss_total_tl": snap.profit_loss_total,
+            "futures_volume_tl": snap.futures_volume_tl,
+            "options_volume_tl": snap.options_volume_tl,
+            "options_premium_volume_tl": snap.options_premium_volume_tl,
+            "futures_oi_count": snap.futures_oi_count,
+            "futures_oi_value_tl": snap.futures_oi_value_tl,
+            "options_oi_count": snap.options_oi_count,
+            "options_oi_value_tl": snap.options_oi_value_tl,
+        },
+        "interpretation": (
+            "margin_call_total_tl is THE marketwide stress signal. A jump "
+            "in margin_call_to_required_pct vs the prior trading day means "
+            "the CCP is tightening collateral; brokers will issue calls. "
+            "futures_volume_tl + options_volume_tl + open interest are the "
+            "VIOP activity headline. Per-contract SPAN parameters are not "
+            "yet wired (v0.3)."
         ),
     }
 

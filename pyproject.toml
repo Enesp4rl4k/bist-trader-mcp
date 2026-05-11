@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "bist-trader-mcp"
-version = "0.1.1"
+version = "0.1.2"
 description = "BIST Trader MCP — TR finance MCP server: TCMB EVDS, BIST EOD, KAP, VIOP, options math, Pine v6 recipes. Companion to tradesdontlie/tradingview-mcp."
 readme = "README.md"
 requires-python = ">=3.10"

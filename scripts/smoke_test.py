@@ -133,21 +133,22 @@ async def test_viop() -> bool | None:
 
 
 async def test_takasbank() -> bool | None:
-    banner("Takasbank - VIOP margin parameters")
+    banner("Takasbank - VIOP marketwide dashboard")
     try:
-        from bist_trader_mcp.takasbank import fetch_margin_parameters
+        from bist_trader_mcp.takasbank import fetch_viop_margin_snapshot
 
-        rows = await fetch_margin_parameters(
-            trade_date=date.today() - timedelta(days=1)
-        )
-        if not rows:
-            warn("0 rows (holiday or endpoint drift)")
+        snap = await fetch_viop_margin_snapshot(use_cache=True)
+        if not snap.margin_call_total and not snap.margined_account_count:
+            warn("snapshot returned but values empty (WAF cooldown? cache stale?)")
             return False
-        ok(f"received {len(rows)} parameter rows")
-        sample = rows[0]
+        ok(
+            f"margin call {snap.margin_call_total:,.2f} TL / required "
+            f"{snap.required_margin_total:,.2f} TL"
+        )
         info(
-            f"sample: {sample.contract_code} initial={sample.initial_margin} "
-            f"maintenance={sample.maintenance_margin}"
+            f"accounts={snap.margined_account_count:,}  "
+            f"futures_vol={snap.futures_volume_tl:,.0f} TL  "
+            f"futures_oi={snap.futures_oi_count:,}"
         )
         return True
     except Exception as e:

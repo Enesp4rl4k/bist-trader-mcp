@@ -40,10 +40,11 @@ Tek cümle: **"TR finans verisini topla, Claude ile analiz et, sonucu TradingVie
 - 🚧 `get_foreign_ownership` — MKK günlük yabancı pay oranı
 
 ### Türev — VIOP & Takasbank
-- 🚧 `get_viop_settlement` — günlük settle + OI + hacim
-- 🚧 `get_viop_term_structure` — futures vade eğrisi
-- 🚧 `get_viop_margin_parameters` — Takasbank günlük teminat (başlangıç + sürdürme)
-- 🚧 `get_viop_margin_call_alerts` — teminat oranı %5+ değişen kontratlar
+- ✅ `get_viop_dashboard` — **marketwide margin call + volume + OI** snapshot from Takasbank (Playwright + stealth + 6h cache to respect F5 WAF rate limits)
+- 🚧 `get_viop_settlement` — per-contract günlük settle (v0.3, free bulletin discovery)
+- 🚧 `get_viop_term_structure` — futures vade eğrisi (v0.3)
+- 🚧 `get_viop_margin_parameters` — per-contract SPAN parameters (v0.3, file pipeline)
+- 🚧 `get_viop_margin_call_alerts` — per-contract teminat oranı %5+ değişenler (v0.3)
 - ✅ `calculate_option_greeks` — Black-Scholes Δ Γ Θ Vega ρ (TR-distressed IV brackets)
 - ✅ `calculate_implied_volatility` — piyasa fiyatından IV solver
 
@@ -57,11 +58,13 @@ Tek cümle: **"TR finans verisini topla, Claude ile analiz et, sonucu TradingVie
 ### Test durumu
 ```
 pytest:        12 / 12 PASSED   (bond_math 5/5 + options_math 7/7)
-live smoke:    3 live / 4 WIP / 0 unexpected-fail
-                 - yahoo_bist_eod: BIST EOD bars
-                 - evds:           TCMB policy + TLREF + CPI YoY live
-                 - kap:            disclosures live via Playwright
-                 - viop/takasbank/hazine/mkk: WIP (round 2 discovery)
+live smoke:    4 live / 3 WIP / 0 unexpected-fail
+                 - yahoo_bist_eod:        BIST EOD bars
+                 - evds:                  TCMB policy + TLREF + CPI YoY
+                 - kap:                   disclosures via Playwright XHR
+                 - takasbank dashboard:   marketwide margin call + volume + OI
+                                          (Playwright + stealth + 6h cache)
+                 - viop / hazine / mkk:   WIP — v0.3 sprint
 ```
 
 Live smoke: `python scripts/smoke_test.py` (UTF-8 stdout için `PYTHONIOENCODING=utf-8`).

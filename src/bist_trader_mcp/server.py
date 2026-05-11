@@ -19,6 +19,7 @@ from .tools import (
     get_foreign_ownership,
     get_kap_disclosures,
     get_tcmb_policy_rates,
+    get_viop_dashboard,
     get_viop_margin_call_alerts,
     get_viop_margin_parameters,
     get_viop_settlement,
@@ -208,6 +209,23 @@ TOOL_DEFS: list[Tool] = [
             "properties": {
                 "trade_date": {"type": "string"},
                 "threshold_pct": {"type": "number", "default": 5.0},
+            },
+        },
+    ),
+    Tool(
+        name="get_viop_dashboard",
+        description=(
+            "Marketwide VIOP aggregate margin snapshot from Takasbank "
+            "(margined account count, transaction/guarantee-fund margin, "
+            "margin-call total, required margin). Cached 6h to respect "
+            "Takasbank's F5 WAF rate limit. THE marketwide margin stress "
+            "signal."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "use_cache": {"type": "boolean", "default": True},
+                "cache_ttl_seconds": {"type": "integer", "default": 21600},
             },
         },
     ),
@@ -421,6 +439,11 @@ async def _call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             result = await get_viop_margin_call_alerts(
                 trade_date=arguments.get("trade_date"),
                 threshold_pct=float(arguments.get("threshold_pct", 5.0)),
+            )
+        elif name == "get_viop_dashboard":
+            result = await get_viop_dashboard(
+                use_cache=bool(arguments.get("use_cache", True)),
+                cache_ttl_seconds=int(arguments.get("cache_ttl_seconds", 6 * 3600)),
             )
         elif name == "calculate_option_greeks":
             result = calculate_option_greeks(
