@@ -35,7 +35,7 @@ Tek cümle: **"TR finans verisini topla, Claude ile analiz et, sonucu TradingVie
 - 🔑 `list_catalog` — kullanılan EVDS serileri
 
 ### Disclosure / equity
-- 🚧 `get_kap_disclosures` — KAP bildirimi listesi
+- ✅ `get_kap_disclosures` — KAP bildirimi listesi (Playwright-backed, heuristic materyal filtresi)
 - ✅ `get_bist_eod_ohlcv` — BIST hisse/endeks günlük OHLCV (Yahoo Finance v8 chart API)
 - 🚧 `get_foreign_ownership` — MKK günlük yabancı pay oranı
 
@@ -54,16 +54,27 @@ Tek cümle: **"TR finans verisini topla, Claude ile analiz et, sonucu TradingVie
 - ✅ `list_pine_recipes` — TR-aware Pine v6 template kataloğu
 - ✅ `render_pine_recipe` — placeholders'ı canlı veriyle doldur, Pine kodu döndür
 
-### v0.2 test durumu
+### Test durumu
 ```
 pytest:        12 / 12 PASSED   (bond_math 5/5 + options_math 7/7)
-live smoke:    1 live / 6 WIP-or-skipped / 0 unexpected-fail
-                 - yahoo_bist_eod: 11 daily bars received OK
-                 - kap/viop/takasbank/hazine/mkk: WIP (endpoint discovery)
-                 - evds: skipped without TCMB_EVDS_API_KEY (ready when set)
+live smoke:    3 live / 4 WIP / 0 unexpected-fail
+                 - yahoo_bist_eod: BIST EOD bars
+                 - evds:           TCMB policy + TLREF + CPI YoY live
+                 - kap:            disclosures live via Playwright
+                 - viop/takasbank/hazine/mkk: WIP (round 2 discovery)
 ```
 
 Live smoke: `python scripts/smoke_test.py` (UTF-8 stdout için `PYTHONIOENCODING=utf-8`).
+
+### Browser otomasyonu (KAP ve diğer SPA siteler için)
+Bazı TR siteler (KAP'ı başlatmak üzere, yakında MKK/Takasbank) WAF arkasında veriyi yalnızca tarayıcı session'ına servis ediyor. Bu durumda Playwright tabanlı `_browser.py` helper'ı devreye giriyor. Kurulum:
+
+```powershell
+pip install "bist-trader-mcp[browser]"
+python -m playwright install chromium
+```
+
+Browser extra yüklü değilse ilgili tool'lar yine **structured WIP payload** döner (exception fırlatmaz); LLM bunu yorumlayıp kullanıcıya "browser extra eksik" diye söyler.
 
 ## Komposizyon örneği — Claude + tradesdontlie/tradingview-mcp
 

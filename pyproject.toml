@@ -52,6 +52,13 @@ dev = [
     "ruff>=0.5.0",
     "mypy>=1.10.0",
 ]
+# Required to unlock KAP / MKK / Takasbank / etc. — sites that block
+# direct HTTP calls and only serve data via in-browser XHR. After
+# installing this extra you must also run:
+#   python -m playwright install chromium
+browser = [
+    "playwright>=1.40.0",
+]
 
 [project.urls]
 Homepage = "https://github.com/Enesp4rl4k/bist-trader-mcp"
