@@ -288,9 +288,10 @@ TOOL_DEFS: list[Tool] = [
     Tool(
         name="get_dibs_auctions",
         description=(
-            "Treasury (Hazine) DİBS auction calendar + results. Default "
-            "window: -30 to +60 days. Filter by status: scheduled | "
-            "completed | cancelled."
+            "DİBS auction calendar parsed from Hazine's quarterly İç "
+            "Borçlanma Stratejisi PDF. Default window: -30 to +90 days. "
+            "Filter by status (scheduled/completed/cancelled) or override "
+            "the source PDF via `pdf_url`."
         ),
         inputSchema={
             "type": "object",
@@ -298,6 +299,7 @@ TOOL_DEFS: list[Tool] = [
                 "since": {"type": "string"},
                 "until": {"type": "string"},
                 "status": {"type": "string"},
+                "pdf_url": {"type": "string"},
             },
         },
     ),
@@ -470,6 +472,7 @@ async def _call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 since=arguments.get("since"),
                 until=arguments.get("until"),
                 status=arguments.get("status"),
+                pdf_url=arguments.get("pdf_url"),
             )
         elif name == "calculate_basis_fair_value":
             result = calculate_basis_fair_value(

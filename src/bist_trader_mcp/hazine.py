@@ -1,31 +1,54 @@
-"""Hazine — DİBS auction calendar & results fetcher.
+"""Hazine — DİBS auction calendar via the quarterly strategy PDF.
 
-The Turkish Treasury (Hazine ve Maliye Bakanlığı) publishes both:
-    1. A forward-looking borrowing / auction calendar — typically updated
-       at the start of each month with that month's planned issues.
-    2. Auction results — the day after each tender (cut-off rate, demand,
-       bid-to-cover, average yield).
+The Turkish Treasury publishes a quarterly "İç Borçlanma Stratejisi"
+PDF that contains, per month, every scheduled DİBS auction with:
 
-We expose both via a single normalised structure and let the caller filter
-by date / status. Endpoint pattern follows the JSON used by hazine.gov.tr's
-own UI; URLs occasionally move so this module fails defensively.
+    İhale Tarihi (auction date)  |  Valör Tarihi (settlement)
+    İtfa Tarihi  (maturity)      |  Senet Türü   (instrument)
+    Vadesi       (tenor)         |  İhraç Yöntemi (method)
 
-Caveat: When the API is briefly offline, the canonical fallback is the
-monthly borrowing strategy PDF. Parsing that PDF is out of scope for v0.2.
+The PDF is a stable, well-formatted Treasury document — no WAF, no JS.
+We download it via httpx, extract page text with pdfplumber, and parse
+each auction row with a tight regex.
+
+URL discovery
+-------------
+The current quarterly PDF lives at:
+    https://ms.hmb.gov.tr/uploads/<YYYY>/<MM>/Tr<NN>-<Month1>-<Year>
+    -<Month2>-<Year>-Ic-Borclanma-Stratejisi-<hash>.pdf
+
+The trailing hash is unpredictable and the public navigation pages don't
+expose the strategy PDFs reliably. v0.1 ships a small manual registry of
+known URLs and lets callers override `pdf_url=` to point at a fresher
+file once one is published; v0.3 will add a discovery scraper.
 """
 
 from __future__ import annotations
 
+import io
+import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any
 
-from ._wip import wip_error
-from .http_utils import SourceError, fetch_json  # noqa: F401  retained for v0.3
+import httpx
 
-HAZINE_AUCTION_URL = (
-    "https://www.hmb.gov.tr/data/dibs/auction-calendar"
-)
+from ._cache import cache_get, cache_set
+from .http_utils import USER_AGENT, SourceError
+
+
+# v0.1 registry — append the latest known strategy URL on each release.
+# Indexed by the calendar starting month so we can pick the most recent
+# document covering the user's date window.
+QUARTERLY_STRATEGY_URLS: dict[str, str] = {
+    "2026-01": (
+        "https://ms.hmb.gov.tr/uploads/2025/12/"
+        "Tr01-Ocak-Mart-2026-Ic-Borclanma-Stratejisi-"
+        "f3a8bbd23a879490.pdf"
+    ),
+}
+
+DEFAULT_CACHE_TTL_SECONDS = 24 * 3600   # the PDF changes at most monthly
 
 
 @dataclass
@@ -33,10 +56,13 @@ class DIBSAuction:
     auction_id: str | None
     auction_date: str            # YYYY-MM-DD
     settlement_date: str | None
-    instrument: str              # "TL_BOND" | "TL_BILL" | "INFLATION_LINKED" | "SUKUK" | "FX"
-    tenor_months: int | None
-    coupon_pct: float | None
+    maturity_date: str | None
+    instrument: str
+    tenor_days: int | None
+    tenor_label: str | None
+    issuance_method: str | None
     status: str                  # "scheduled" | "completed" | "cancelled"
+    coupon_frequency: str | None
     avg_yield_pct: float | None
     cut_off_yield_pct: float | None
     bid_amount: float | None
@@ -44,91 +70,228 @@ class DIBSAuction:
     bid_to_cover: float | None
 
 
-def _to_float(v: Any) -> float | None:
-    if v in (None, "", "-"):
-        return None
+# Regex tuned against the Ocak-Mart 2026 PDF. Each scheduled auction line
+# looks like (text-extracted):
+#   "DD.MM.YYYY DD.MM.YYYY DD.MM.YYYY <Instrument …> <N>Yıl/Ay / <N> Gün <Method>"
+# where the three dates are auction / settlement / maturity, and the
+# remaining tokens form the instrument label + tenor + method.
+_AUCTION_LINE_RX = re.compile(
+    r"""^
+    \s*(?P<auction>\d{1,2}\.\d{1,2}\.\d{4})\s+
+    (?P<settlement>\d{1,2}\.\d{1,2}\.\d{4})\s+
+    (?P<maturity>\d{1,2}\.\d{1,2}\.\d{4})\s+
+    (?P<rest>.+)$
+    """,
+    re.VERBOSE,
+)
+
+_TENOR_RX = re.compile(
+    r"""
+    (?P<tenor_label>\d+\s*(?:Yıl|Ay|Hafta|Gün))
+    \s*/\s*
+    (?P<days>\d+)\s*Gün
+    """,
+    re.VERBOSE,
+)
+
+
+def _iso(date_tr: str) -> str | None:
     try:
-        return float(str(v).replace(",", "."))
-    except (TypeError, ValueError):
+        return datetime.strptime(date_tr.strip(), "%d.%m.%Y").date().isoformat()
+    except ValueError:
         return None
 
 
-def _to_int(v: Any) -> int | None:
-    f = _to_float(v)
-    if f is None:
-        return None
-    try:
-        return int(f)
-    except (TypeError, ValueError):
-        return None
+def _parse_pdf_text(text: str) -> list[DIBSAuction]:
+    """Walk text line by line, emit DIBSAuction per matching auction row.
 
+    The strategy PDF wraps an auction across two visual lines when a
+    coupon-frequency note follows. We attach trailing coupon notes to
+    the prior auction's `coupon_frequency` field.
+    """
+    auctions: list[DIBSAuction] = []
+    last: DIBSAuction | None = None
 
-def _iso(value: Any) -> str | None:
-    if not value:
-        return None
-    s = str(value)
-    for fmt in ("%Y-%m-%d", "%d.%m.%Y", "%d-%m-%Y", "%Y-%m-%dT%H:%M:%S"):
-        try:
-            return datetime.strptime(s, fmt).date().isoformat()
-        except ValueError:
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
             continue
-    return s[:10] if len(s) >= 10 else s
 
+        m = _AUCTION_LINE_RX.match(line)
+        if not m:
+            if last and (
+                ("kupon" in line.lower())
+                or ("kira" in line.lower() and "ödemeli" in line.lower())
+            ):
+                last.coupon_frequency = line
+            continue
 
-def _parse(row: dict[str, Any]) -> DIBSAuction | None:
-    auction_date = _iso(
-        row.get("auctionDate") or row.get("ihaleTarihi")
-    )
-    if not auction_date:
-        return None
+        auction_iso = _iso(m.group("auction"))
+        if auction_iso is None:
+            continue
 
-    status = (row.get("status") or row.get("durum") or "scheduled").lower()
-    if status not in {"scheduled", "completed", "cancelled"}:
-        # Map TR labels.
-        if "tamam" in status:
-            status = "completed"
-        elif "iptal" in status:
-            status = "cancelled"
+        rest = m.group("rest").strip()
+        tenor_match = _TENOR_RX.search(rest)
+        tenor_days: int | None = None
+        tenor_label: str | None = None
+        method: str | None = None
+
+        if tenor_match:
+            tenor_days = int(tenor_match.group("days"))
+            tenor_label = tenor_match.group("tenor_label").replace(" ", "")
+            instrument = rest[: tenor_match.start()].strip()
+            method = rest[tenor_match.end():].strip() or None
         else:
-            status = "scheduled"
+            instrument = rest
 
-    bid = _to_float(row.get("bidAmount") or row.get("teklifTutari"))
-    accepted = _to_float(row.get("acceptedAmount") or row.get("kabulTutari"))
-    btc = (bid / accepted) if (bid and accepted) else None
+        last = DIBSAuction(
+            auction_id=None,
+            auction_date=auction_iso,
+            settlement_date=_iso(m.group("settlement")),
+            maturity_date=_iso(m.group("maturity")),
+            instrument=instrument,
+            tenor_days=tenor_days,
+            tenor_label=tenor_label,
+            issuance_method=method,
+            status="scheduled",
+            coupon_frequency=None,
+            avg_yield_pct=None,
+            cut_off_yield_pct=None,
+            bid_amount=None,
+            accepted_amount=None,
+            bid_to_cover=None,
+        )
+        auctions.append(last)
 
-    return DIBSAuction(
-        auction_id=str(row.get("auctionId") or row.get("ihaleId") or "") or None,
-        auction_date=auction_date,
-        settlement_date=_iso(row.get("settlementDate") or row.get("valor")),
-        instrument=str(row.get("instrument") or row.get("kiymet") or "TL_BOND"),
-        tenor_months=_to_int(row.get("tenorMonths") or row.get("vade")),
-        coupon_pct=_to_float(row.get("couponRate") or row.get("kuponOrani")),
-        status=status,
-        avg_yield_pct=_to_float(row.get("averageYield") or row.get("ortalamaFaiz")),
-        cut_off_yield_pct=_to_float(row.get("cutOffYield") or row.get("kesinFaiz")),
-        bid_amount=bid,
-        accepted_amount=accepted,
-        bid_to_cover=btc,
-    )
+    return auctions
+
+
+def _pick_strategy_url(reference: date) -> str:
+    """Return the strategy URL covering `reference`, falling back to the
+    nearest earlier published quarter."""
+    if not QUARTERLY_STRATEGY_URLS:
+        raise SourceError("hazine", "no strategy URL registered in registry")
+
+    ref_key = reference.strftime("%Y-%m")
+    sorted_keys = sorted(QUARTERLY_STRATEGY_URLS.keys())
+    chosen = sorted_keys[0]
+    for k in sorted_keys:
+        if k <= ref_key:
+            chosen = k
+        else:
+            break
+    return QUARTERLY_STRATEGY_URLS[chosen]
+
+
+def _download_pdf(url: str) -> bytes:
+    try:
+        with httpx.Client(
+            timeout=30.0, headers={"User-Agent": USER_AGENT, "Accept": "*/*"}
+        ) as client:
+            resp = client.get(url, follow_redirects=True)
+            resp.raise_for_status()
+            return resp.content
+    except httpx.HTTPError as e:
+        raise SourceError("hazine", f"PDF download failed: {e}") from e
+
+
+def _extract_pdf_text(content: bytes) -> str:
+    import pdfplumber  # lazy import — keeps `import bist_trader_mcp` fast
+
+    out: list[str] = []
+    with pdfplumber.open(io.BytesIO(content)) as pdf:
+        for page in pdf.pages:
+            t = page.extract_text() or ""
+            if t:
+                out.append(t)
+    return "\n".join(out)
 
 
 async def fetch_auctions(
     since: date | str | None = None,
     until: date | str | None = None,
     status: str | None = None,
+    pdf_url: str | None = None,
+    use_cache: bool = True,
+    cache_ttl_seconds: int = DEFAULT_CACHE_TTL_SECONDS,
 ) -> list[DIBSAuction]:
-    """Fetch DİBS auctions in a date window.
+    """Return the DİBS auction calendar within a date window.
 
-    v0.2 STATUS: hmb.gov.tr returns HTML (not JSON) on the URL pattern
-    observed; the auction calendar lives as a rendered table or
-    downloadable Excel/PDF rather than as a public JSON endpoint.
-    Discovery for v0.3 will likely involve parsing the monthly
-    borrowing strategy PDF. Parser + dataclass are ready.
+    Args:
+        since: lower bound for auction_date (default 30 days ago).
+        until: upper bound (default +90 days).
+        status: optional filter — "scheduled" | "completed" | "cancelled".
+        pdf_url: override which strategy PDF to parse. Falls back to the
+            registered current quarter.
+        use_cache: serve from disk cache when fresh.
+        cache_ttl_seconds: cache lifetime (default 24h).
     """
-    raise wip_error(
-        "hazine",
-        f"since={since} until={until} status={status}",
-    )
+    since_date = _coerce(since) if since else date.today() - timedelta(days=30)
+    until_date = _coerce(until) if until else date.today() + timedelta(days=90)
+
+    url = pdf_url or _pick_strategy_url(reference=date.today())
+    cache_key = f"hazine.strategy_pdf:{url}"
+
+    payload: list[dict[str, Any]] | None = None
+    if use_cache:
+        cached = cache_get(cache_key, ttl_seconds=cache_ttl_seconds)
+        if isinstance(cached, list):
+            payload = cached
+
+    if payload is None:
+        pdf_bytes = _download_pdf(url)
+        try:
+            text = _extract_pdf_text(pdf_bytes)
+        except Exception as e:
+            raise SourceError("hazine", f"PDF parse failed: {e}") from e
+        parsed = _parse_pdf_text(text)
+        payload = [
+            {
+                "auction_date": a.auction_date,
+                "settlement_date": a.settlement_date,
+                "maturity_date": a.maturity_date,
+                "instrument": a.instrument,
+                "tenor_days": a.tenor_days,
+                "tenor_label": a.tenor_label,
+                "issuance_method": a.issuance_method,
+                "status": a.status,
+                "coupon_frequency": a.coupon_frequency,
+            }
+            for a in parsed
+        ]
+        cache_set(cache_key, payload, ttl_seconds=cache_ttl_seconds)
+
+    out: list[DIBSAuction] = []
+    for row in payload:
+        try:
+            row_date = date.fromisoformat(row["auction_date"])
+        except (ValueError, KeyError, TypeError):
+            continue
+        if row_date < since_date or row_date > until_date:
+            continue
+        a = DIBSAuction(
+            auction_id=None,
+            auction_date=row.get("auction_date", ""),
+            settlement_date=row.get("settlement_date"),
+            maturity_date=row.get("maturity_date"),
+            instrument=row.get("instrument", ""),
+            tenor_days=row.get("tenor_days"),
+            tenor_label=row.get("tenor_label"),
+            issuance_method=row.get("issuance_method"),
+            status=row.get("status", "scheduled"),
+            coupon_frequency=row.get("coupon_frequency"),
+            avg_yield_pct=None,
+            cut_off_yield_pct=None,
+            bid_amount=None,
+            accepted_amount=None,
+            bid_to_cover=None,
+        )
+        if status and a.status != status.lower():
+            continue
+        out.append(a)
+
+    out.sort(key=lambda a: a.auction_date)
+    return out
 
 
 def _coerce(value: date | str) -> date:
@@ -140,3 +303,10 @@ def _coerce(value: date | str) -> date:
         except ValueError:
             continue
     raise SourceError("hazine", f"bad date: {value!r}")
+
+
+__all__ = [
+    "DIBSAuction",
+    "QUARTERLY_STRATEGY_URLS",
+    "fetch_auctions",
+]

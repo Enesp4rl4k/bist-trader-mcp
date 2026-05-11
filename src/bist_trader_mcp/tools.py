@@ -810,17 +810,31 @@ async def get_dibs_auctions(
     since: str | None = None,
     until: str | None = None,
     status: str | None = None,
+    pdf_url: str | None = None,
 ) -> dict[str, Any]:
-    """DİBS auction calendar + results. Default window: -30d to +60d."""
+    """DİBS auction calendar parsed from Hazine's quarterly strategy PDF.
+
+    Args:
+        since: lower-bound auction date (default 30 days ago).
+        until: upper-bound auction date (default +90 days).
+        status: filter — "scheduled" | "completed" | "cancelled".
+        pdf_url: optional override of the strategy PDF URL (useful when
+            a fresher quarterly bulletin has been published).
+    """
     try:
-        auctions = await fetch_auctions(since=since, until=until, status=status)
+        auctions = await fetch_auctions(
+            since=since, until=until, status=status, pdf_url=pdf_url
+        )
     except SourceError as e:
         if "endpoint discovery pending" in str(e):
             return wip_payload("hazine", str(e))
         return {"error": "hazine_error", "detail": str(e)}
 
     return {
-        "source": "Hazine ve Maliye Bakanlığı — DİBS auction calendar",
+        "source": (
+            "Hazine ve Maliye Bakanlığı — quarterly İç Borçlanma "
+            "Stratejisi PDF (auction calendar)"
+        ),
         "status_filter": status,
         "count": len(auctions),
         "auctions": [
@@ -828,9 +842,12 @@ async def get_dibs_auctions(
                 "auction_id": a.auction_id,
                 "auction_date": a.auction_date,
                 "settlement_date": a.settlement_date,
+                "maturity_date": a.maturity_date,
                 "instrument": a.instrument,
-                "tenor_months": a.tenor_months,
-                "coupon_pct": a.coupon_pct,
+                "tenor_days": a.tenor_days,
+                "tenor_label": a.tenor_label,
+                "issuance_method": a.issuance_method,
+                "coupon_frequency": a.coupon_frequency,
                 "status": a.status,
                 "avg_yield_pct": a.avg_yield_pct,
                 "cut_off_yield_pct": a.cut_off_yield_pct,
@@ -840,6 +857,11 @@ async def get_dibs_auctions(
             }
             for a in auctions
         ],
+        "notes": (
+            "Auction results (cut-off, bid/cover) are NOT in the strategy "
+            "PDF — those are published as separate per-auction press "
+            "releases that v0.3 will ingest."
+        ),
     }
 
 

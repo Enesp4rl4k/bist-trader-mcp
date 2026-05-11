@@ -162,17 +162,20 @@ async def test_takasbank() -> bool | None:
 async def test_hazine() -> bool | None:
     banner("Hazine - DİBS auction calendar")
     try:
+        from datetime import date as _date
         from bist_trader_mcp.hazine import fetch_auctions
 
-        rows = await fetch_auctions()
+        # Use the Tr01 PDF's calendar window so the smoke runs regardless
+        # of today's date relative to the registered strategy quarter.
+        rows = await fetch_auctions(since="2026-01-01", until="2026-04-30")
         if not rows:
-            warn("0 auctions found in -30/+60 day window")
+            warn("0 auctions found in the strategy window")
             return False
-        ok(f"received {len(rows)} auctions")
+        ok(f"received {len(rows)} scheduled auctions from strategy PDF")
         for a in rows[:3]:
             info(
-                f"{a.auction_date} {a.instrument} tenor={a.tenor_months}m "
-                f"status={a.status} avg_yield={a.avg_yield_pct}"
+                f"{a.auction_date} | {a.instrument[:40]} | "
+                f"{a.tenor_label or '?'} / {a.tenor_days or '?'}d"
             )
         return True
     except Exception as e:

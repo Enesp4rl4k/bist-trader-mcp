@@ -30,7 +30,7 @@ Tek cümle: **"TR finans verisini topla, Claude ile analiz et, sonucu TradingVie
 ### Rates / Hazine / TCMB
 - 🔑 `get_yield_curve` — DİBS benchmark eğrisi (1M-10Y), TCMB EVDS
 - 🔑 `get_tcmb_policy_rates` — 1w repo + koridor zaman serisi
-- 🚧 `get_dibs_auctions` — Hazine ihale takvimi + sonuçları
+- ✅ `get_dibs_auctions` — Hazine ihale takvimi (quarterly İç Borçlanma Stratejisi PDF → pdfplumber → 22+ scheduled auction)
 - ✅ `calculate_bond_metrics` — YTM, modified duration, convexity (saf hesap)
 - 🔑 `list_catalog` — kullanılan EVDS serileri
 
@@ -58,13 +58,15 @@ Tek cümle: **"TR finans verisini topla, Claude ile analiz et, sonucu TradingVie
 ### Test durumu
 ```
 pytest:        12 / 12 PASSED   (bond_math 5/5 + options_math 7/7)
-live smoke:    4 live / 3 WIP / 0 unexpected-fail
+live smoke:    5 live / 2 WIP / 0 unexpected-fail
                  - yahoo_bist_eod:        BIST EOD bars
                  - evds:                  TCMB policy + TLREF + CPI YoY
                  - kap:                   disclosures via Playwright XHR
                  - takasbank dashboard:   marketwide margin call + volume + OI
                                           (Playwright + stealth + 6h cache)
-                 - viop / hazine / mkk:   WIP — v0.3 sprint
+                 - hazine:                DİBS auction calendar
+                                          (quarterly PDF + pdfplumber + 24h cache)
+                 - viop / mkk:            WIP — v0.3 sprint
 ```
 
 Live smoke: `python scripts/smoke_test.py` (UTF-8 stdout için `PYTHONIOENCODING=utf-8`).
