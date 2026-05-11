@@ -18,6 +18,7 @@ from .tools import (
     get_dibs_auctions,
     get_foreign_ownership,
     get_kap_disclosures,
+    get_mkk_market_stats,
     get_tcmb_policy_rates,
     get_viop_dashboard,
     get_viop_margin_call_alerts,
@@ -166,8 +167,9 @@ TOOL_DEFS: list[Tool] = [
     Tool(
         name="get_foreign_ownership",
         description=(
-            "Daily foreign-ownership ratio (% of free float) for a BIST ticker. "
-            "Source: MKK."
+            "Daily per-ticker foreign-ownership ratio (% of free float). "
+            "v0.2 WIP: requires MKK portal auth. Use get_mkk_market_stats "
+            "for marketwide retail/institutional + equity/fixed-income trends."
         ),
         inputSchema={
             "type": "object",
@@ -176,6 +178,23 @@ TOOL_DEFS: list[Tool] = [
                 "ticker": {"type": "string"},
                 "since": {"type": "string"},
                 "until": {"type": "string"},
+            },
+        },
+    ),
+    Tool(
+        name="get_mkk_market_stats",
+        description=(
+            "Marketwide MKK monthly system statistics: 12-month time series "
+            "for total investors, investors holding equities / gov debt / "
+            "corp bonds / mutual funds / structured products, transfers, "
+            "and transactions. Source: MKK monthly bulletin PDF, cached 24h."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "pdf_url": {"type": "string"},
+                "use_cache": {"type": "boolean", "default": True},
+                "cache_ttl_seconds": {"type": "integer", "default": 86400},
             },
         },
     ),
@@ -430,6 +449,12 @@ async def _call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 ticker=arguments["ticker"],
                 since=arguments.get("since"),
                 until=arguments.get("until"),
+            )
+        elif name == "get_mkk_market_stats":
+            result = await get_mkk_market_stats(
+                pdf_url=arguments.get("pdf_url"),
+                use_cache=bool(arguments.get("use_cache", True)),
+                cache_ttl_seconds=int(arguments.get("cache_ttl_seconds", 86400)),
             )
         elif name == "get_viop_margin_parameters":
             result = await get_viop_margin_parameters(

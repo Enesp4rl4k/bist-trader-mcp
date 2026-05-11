@@ -142,7 +142,10 @@ async def call_json_xhr(
                     extra_http_headers={"Accept-Language": accept_language},
                 )
                 page = await ctx.new_page()
-                await page.goto(page_url, wait_until="networkidle", timeout=nav_timeout_ms)
+                # `domcontentloaded` is more reliable than `networkidle`
+                # for sites with continuous analytics chatter (KAP keeps
+                # firing trackers indefinitely, so networkidle never hits).
+                await page.goto(page_url, wait_until="domcontentloaded", timeout=nav_timeout_ms)
                 if wait_after_nav_ms > 0:
                     await page.wait_for_timeout(wait_after_nav_ms)
 

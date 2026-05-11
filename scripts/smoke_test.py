@@ -187,20 +187,24 @@ async def test_hazine() -> bool | None:
 
 
 async def test_mkk() -> bool | None:
-    banner("MKK - foreign ownership (THYAO)")
+    banner("MKK - marketwide system statistics")
     try:
-        from bist_trader_mcp.mkk import fetch_foreign_ownership
+        from bist_trader_mcp.mkk import fetch_market_stats
 
-        points = await fetch_foreign_ownership("THYAO")
-        if not points:
-            warn("0 points (endpoint drift likely)")
+        stats = await fetch_market_stats(use_cache=True)
+        if not stats.rows:
+            warn("no rows parsed from PDF")
             return False
-        ok(f"received {len(points)} daily points")
-        latest = points[-1]
-        info(
-            f"latest: {latest.date} "
-            f"foreign_pct_of_freefloat={latest.foreign_pct_of_freefloat}"
+        ok(f"parsed {len(stats.rows)} rows over {len(stats.months)} months")
+        # Pick one signature metric for the info line.
+        total = next(
+            (r for r in stats.rows if r.metric == "total_investors"), None
         )
+        if total and total.monthly_values:
+            info(
+                f"latest month {stats.months[-1]} — "
+                f"total_investors={total.monthly_values[-1]:,.0f}"
+            )
         return True
     except Exception as e:
         if _is_wip(e):

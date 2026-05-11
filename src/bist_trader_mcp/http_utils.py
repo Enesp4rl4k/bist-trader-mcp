@@ -19,7 +19,7 @@ DEFAULT_RETRIES = 2
 DEFAULT_BACKOFF_SECONDS = 0.75
 
 USER_AGENT = (
-    "bist-trader-mcp/0.1.3 (+https://github.com/Enesp4rl4k/bist-trader-mcp) "
+    "bist-trader-mcp/0.2.0 (+https://github.com/Enesp4rl4k/bist-trader-mcp) "
     "research tool - respects robots.txt"
 )
 

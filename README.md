@@ -37,7 +37,8 @@ Tek cümle: **"TR finans verisini topla, Claude ile analiz et, sonucu TradingVie
 ### Disclosure / equity
 - ✅ `get_kap_disclosures` — KAP bildirimi listesi (Playwright-backed, heuristic materyal filtresi)
 - ✅ `get_bist_eod_ohlcv` — BIST hisse/endeks günlük OHLCV (Yahoo Finance v8 chart API)
-- 🚧 `get_foreign_ownership` — MKK günlük yabancı pay oranı
+- ✅ `get_mkk_market_stats` — MKK marketwide aylık zaman serisi (toplam yatırımcı, equity/gov-debt/corp-bond/mutual-fund holders, transactions). PDF + pdfplumber + 24h cache.
+- 🚧 `get_foreign_ownership` — MKK **per-ticker** yabancı pay oranı (gated portal, v0.3)
 
 ### Türev — VIOP & Takasbank
 - ✅ `get_viop_dashboard` — **marketwide margin call + volume + OI** snapshot from Takasbank (Playwright + stealth + 6h cache to respect F5 WAF rate limits)
@@ -58,7 +59,7 @@ Tek cümle: **"TR finans verisini topla, Claude ile analiz et, sonucu TradingVie
 ### Test durumu
 ```
 pytest:        12 / 12 PASSED   (bond_math 5/5 + options_math 7/7)
-live smoke:    5 live / 2 WIP / 0 unexpected-fail
+live smoke:    6 live / 1 WIP / 0 unexpected-fail
                  - yahoo_bist_eod:        BIST EOD bars
                  - evds:                  TCMB policy + TLREF + CPI YoY
                  - kap:                   disclosures via Playwright XHR
@@ -66,7 +67,9 @@ live smoke:    5 live / 2 WIP / 0 unexpected-fail
                                           (Playwright + stealth + 6h cache)
                  - hazine:                DİBS auction calendar
                                           (quarterly PDF + pdfplumber + 24h cache)
-                 - viop / mkk:            WIP — v0.3 sprint
+                 - mkk market stats:      monthly investor stats time series
+                                          (PDF + pdfplumber + 24h cache, 18 rows)
+                 - viop per-contract:     WIP — v0.3
 ```
 
 Live smoke: `python scripts/smoke_test.py` (UTF-8 stdout için `PYTHONIOENCODING=utf-8`).

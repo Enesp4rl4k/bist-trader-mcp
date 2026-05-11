@@ -19,7 +19,7 @@ from .evds import EVDSClient, EVDSError, EVDSObservation
 from .hazine import fetch_auctions
 from .http_utils import SourceError
 from .kap import fetch_disclosures
-from .mkk import fetch_foreign_ownership
+from .mkk import fetch_foreign_ownership, fetch_market_stats
 from .options_math import black_scholes, implied_volatility
 from .recipes import list_recipes, render_recipe
 from .series_catalog import (
@@ -415,6 +415,67 @@ async def get_foreign_ownership(
         "disclaimer": (
             "Free-float definition follows MKK convention; some delisted or "
             "newly listed companies may report partial history."
+        ),
+    }
+
+
+async def get_mkk_market_stats(
+    pdf_url: str | None = None,
+    use_cache: bool = True,
+    cache_ttl_seconds: int = 24 * 3600,
+) -> dict[str, Any]:
+    """Marketwide MKK system-statistics (monthly time series) from PDF.
+
+    The MKK publishes a monthly PDF with a 12-month rolling matrix of:
+        - account openings
+        - total investors
+        - investors holding equities, gov debt, corp bonds, mutual funds,
+          structured products, etc.
+        - securities transfers (count + nominal + market value)
+        - total transactions (count + nominal + market value)
+
+    A trend break in any row is a macro tell for Turkish retail
+    participation. Cached 24h; the PDF only changes monthly.
+    """
+    try:
+        stats = await fetch_market_stats(
+            pdf_url=pdf_url,
+            use_cache=use_cache,
+            cache_ttl_seconds=cache_ttl_seconds,
+        )
+    except SourceError as e:
+        if "endpoint discovery pending" in str(e):
+            return wip_payload("mkk", str(e))
+        return {"error": "mkk_error", "detail": str(e)}
+
+    # Build a quick-look snapshot from the latest column.
+    latest_idx = len(stats.months) - 1 if stats.months else -1
+    latest_month = stats.months[latest_idx] if latest_idx >= 0 else None
+
+    latest_snapshot: dict[str, float | None] = {}
+    history: list[dict[str, Any]] = []
+    for r in stats.rows:
+        history.append({
+            "row_id": r.row_id,
+            "metric": r.metric,
+            "monthly_values": r.monthly_values,
+        })
+        if latest_idx >= 0 and latest_idx < len(r.monthly_values):
+            latest_snapshot[r.metric] = r.monthly_values[latest_idx]
+
+    return {
+        "source": "MKK — System Statistics monthly bulletin (English)",
+        "source_url": stats.source_url,
+        "fetched_at": stats.fetched_at,
+        "months": stats.months,
+        "latest_month": latest_month,
+        "latest_snapshot": latest_snapshot,
+        "history": history,
+        "notes": (
+            "Each metric carries a full monthly time series (one value "
+            "per month in the `months` array, oldest-first). Use this "
+            "for retail-vs-institutional, equity-vs-fixed-income and "
+            "transaction-throughput trend reads."
         ),
     }
 
