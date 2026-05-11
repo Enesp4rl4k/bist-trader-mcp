@@ -112,11 +112,44 @@ async def fetch_margin_parameters(
 ) -> list[MarginParameter]:
     """Pull Takasbank's daily VIOP margin parameter snapshot.
 
-    v0.2 STATUS: Takasbank's portal returns 404 for direct fetches on
-    the URL pattern observed; the data lives behind their UI's auth/
-    session layer. Endpoint discovery is tracked for v0.3 (likely needs
-    Excel bulletin scraping rather than a JSON endpoint). The parameter
-    dataclass and change-detection logic in this module are ready.
+    v0.1.1 STATUS: discovery progressed 2026-05-11.
+
+    Takasbank publishes 20 daily VIOP statistics pages (live values
+    visible directly on the parent dashboard) at:
+        https://www.takasbank.com.tr/tr/istatistikler/
+            vadeli-islem-ve-opsiyon-piyasasi-viop/<report-slug>
+
+    Key report slugs:
+      - teminat-tamamlama-cagrisi-raporu  (margin call total)
+      - bulunmasi-gereken-teminat-raporu  (required margin)
+      - islem-teminati-raporu             (transaction margin)
+      - garanti-fonu-teminati-raporu      (guarantee fund)
+      - vadeli-islem-sozlesmesi-islem-hacmi-raporu (futures volume)
+      - opsiyon-islem-hacmi-raporu        (options volume)
+      - vadeli-islem-sozlesmesi-acik-pozisyon-adet-raporu (futures OI)
+      - opsiyon-acik-pozisyon-adedi-raporu (options OI)
+
+    Live discovery 2026-05-11 dashboard snapshot:
+      - Teminatlı Hesap Sayısı:            113,405
+      - Teminat Tamamlama Çağrısı:         404,002,374.47 TL
+      - Bulunması Gereken Teminat:         96,174,374,438.15 TL
+
+    Obstacles for direct scraping:
+      1. F5 BIG-IP TSPD WAF blocks plain HTTP and naive Playwright.
+      2. playwright-stealth bypasses the bot fingerprint but Takasbank
+         then trips IP-based rate limits after 5-10 probes.
+      3. Report sub-pages render charts via async JS; values arrive
+         after user-interaction (date picker, dropdown).
+
+    Path forward (v0.3, separate sprint):
+      - Add light IP rotation or rate-limited fetch (one request /
+        15 minutes per IP).
+      - Use page.locator() with explicit waits rather than innerText.
+      - Optionally drive date-picker controls programmatically.
+      - Cache snapshot for 24h since the data is daily anyway.
+
+    Until then this tool returns a structured WIP payload so the LLM
+    explains the gap to the user rather than hallucinating values.
     """
     raise wip_error(
         "takasbank",
