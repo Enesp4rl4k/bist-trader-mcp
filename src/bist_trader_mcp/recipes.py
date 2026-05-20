@@ -63,6 +63,70 @@ RECIPES: dict[str, RecipeMeta] = {
             "AS_OF_DATE",
         ),
     ),
+    "tr_kap_marker": RecipeMeta(
+        name="tr_kap_marker",
+        filename="tr_kap_marker.pine",
+        description=(
+            "Overlay material KAP disclosures as labels on a BIST equity chart. "
+            "Combine with get_kap_disclosures(only_material=true). The MCP "
+            "expands KAP_EVENTS_JSON into Pine array.push() calls via the "
+            "KAP_EVENTS_LOADER placeholder."
+        ),
+        required_placeholders=(
+            "TICKER",
+            "KAP_EVENTS_LOADER",
+            "AS_OF_DATE",
+        ),
+    ),
+    "tr_foreign_flow": RecipeMeta(
+        name="tr_foreign_flow",
+        filename="tr_foreign_flow.pine",
+        description=(
+            "Histogram of daily change in foreign ownership ratio for a BIST "
+            "ticker. Combine with get_foreign_ownership. Fires an alert when "
+            "ΔFO drops below the configured threshold."
+        ),
+        required_placeholders=(
+            "TICKER",
+            "FOREIGN_FLOW_LOADER",
+            "ALERT_DROP_THRESHOLD",
+            "AS_OF_DATE",
+        ),
+    ),
+    "tr_margin_pulse": RecipeMeta(
+        name="tr_margin_pulse",
+        filename="tr_margin_pulse.pine",
+        description=(
+            "Marketwide VIOP margin call total / required margin ratio with "
+            "stress threshold. Combine with get_viop_dashboard."
+        ),
+        required_placeholders=(
+            "MARGIN_CALL_TL",
+            "REQUIRED_MARGIN_TL",
+            "MARGIN_HISTORY_LOADER",
+            "STRESS_THRESHOLD",
+            "AS_OF_DATE",
+        ),
+    ),
+    "tr_iv_surface": RecipeMeta(
+        name="tr_iv_surface",
+        filename="tr_iv_surface.pine",
+        description=(
+            "VIOP option IV surface snapshot table on chart: ATM term "
+            "structure rows + 25-delta skew + front-vs-back vol slope. "
+            "Combine with get_viop_iv_surface."
+        ),
+        required_placeholders=(
+            "UNDERLYING",
+            "SPOT",
+            "ATM_TERM_LOADER",
+            "SKEW_25D_PUT_PCT",
+            "SKEW_25D_CALL_PCT",
+            "SKEW_VOL_PTS",
+            "TERM_SLOPE_VOL_PTS",
+            "AS_OF_DATE",
+        ),
+    ),
 }
 
 

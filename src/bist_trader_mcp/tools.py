@@ -12,19 +12,60 @@ from datetime import date, timedelta
 from typing import Any
 
 from ._wip import wip_payload
+from .backtest import SIGNAL_GENERATORS, run_backtest
 from .bist_eod import fetch_eod_ohlcv
+from .bist_snapshot import fetch_market_summary as _fetch_market_summary
+from .bist_sectors import (
+    BIST_SECTORS,
+    compute_rotation_metrics,
+    fetch_sector_closes,
+)
+from .bist_snapshot import fetch_snapshot as _fetch_snapshot
 from .bond_math import bond_metrics
+from .calendar_data import build_calendar as _build_calendar
+from .correlation import correlation_matrix as _correlation_matrix
+from .correlation import rolling_correlation as _rolling_correlation
+from .deribit import build_deribit_surface, fetch_deribit_option_chain
+from .fear_greed import fetch_fear_greed
+from .crypto import (
+    fetch_binance_klines,
+    fetch_coin_spots,
+    fetch_funding_rates,
+    fetch_open_interest_history,
+)
 from .evds import EVDSClient, EVDSError, EVDSObservation
+from .fx import fx_forward_curve as _fx_forward_curve
+from .global_fx import fetch_fx_history, fetch_fx_matrix, fetch_fx_spot
+from .global_markets import fetch_global_pulse
 from .hazine import fetch_auctions
 from .http_utils import SourceError
+from .iv_surface import build_iv_surface, find_spread_opportunities
+from .kelly import kelly_panel, position_size_from_atr
+from .news import NEWS_FEEDS, fetch_news
+from .onchain import fetch_btc_network_stats, fetch_eth_gas_oracle
+from .performance import performance_panel
+from .portfolio_opt import optimize_portfolio
+from .realized_vol import realized_vol_panel
+from .strategies import STRATEGY_TEMPLATES, StrategyLeg, simulate_strategy
+from .vol_forecast import ewma_volatility, garch_forecast
+from .yield_fitter import (
+    evaluate_curve_grid,
+    fit_nelson_siegel,
+)
 from .kap import fetch_disclosures
 from .mkk import fetch_foreign_ownership, fetch_market_stats
 from .options_math import black_scholes, implied_volatility
+from .portfolio import aggregate_portfolio_greeks as _aggregate_portfolio_greeks
+from .portfolio import calculate_portfolio_var as _calc_var
+from .portfolio import stress_test_portfolio as _stress_test
 from .recipes import list_recipes, render_recipe
+from .technicals import compute_snapshot as _tech_snapshot
 from .series_catalog import (
     CPI_HEADLINE,
     DIBS_YIELD_SERIES,
+    EURTRY_SELLING,
     POLICY_RATE_SERIES,
+    USDTRY_SELLING,
     list_known_series,
 )
 from .takasbank import (
@@ -32,7 +73,7 @@ from .takasbank import (
     fetch_margin_parameters,
     fetch_viop_margin_snapshot,
 )
-from .viop import fetch_daily_settlement, fetch_term_structure
+from .viop import fetch_daily_settlement, fetch_option_chain, fetch_term_structure
 
 
 def _observations_to_series(
@@ -113,6 +154,105 @@ async def get_yield_curve(
         "disclaimer": (
             "This data is for research / informational use only and is not "
             "investment advice. Verify with primary sources for trading decisions."
+        ),
+    }
+
+
+async def get_repo_curve(
+    as_of: str | None = None,
+    window_days: int = 14,
+    client: EVDSClient | None = None,
+) -> dict[str, Any]:
+    """Turkish TL money-market / repo rate panel as of a date.
+
+    Returns the practical short-end of the TL curve: TCMB 1-week repo
+    (the policy rate), BIST TLREF (effective O/N TL benchmark), and BIST
+    overnight weighted-avg repo. Plus cross-spreads vs the policy rate —
+    the canonical funding-stress reads:
+
+    - tlref - policy:  positive = TL is more expensive than policy → tightening
+    - bist_o/n - policy: same idea, broader collateral pool
+    - bist_o/n - tlref: collateral-quality spread (positive = sec-funding stress)
+
+    The legacy interest-rate corridor (APIFON1/APIFON2) was retired by
+    TCMB in 2024; this is the current effective replacement. For a full
+    DİBS yield curve see get_yield_curve (v0.3 WIP for tenor-bucketed).
+
+    Args:
+        as_of: YYYY-MM-DD. If None, latest available is used.
+        window_days: how many days back to search for the latest non-null
+            observation per series. Default 14 (covers long weekends).
+    """
+    client = client or EVDSClient()
+    end = date.fromisoformat(as_of) if as_of else date.today()
+    start = end - timedelta(days=max(1, window_days))
+
+    series_codes = list(POLICY_RATE_SERIES.values())
+    try:
+        observations = await client.get_series(series_codes, start=start, end=end)
+    except EVDSError as e:
+        return {"error": "evds_error", "detail": str(e)}
+
+    series_map = _observations_to_series(observations)
+
+    # tenor → (friendly_key, EVDS code)
+    rows: list[dict[str, Any]] = []
+    latest: dict[str, dict[str, Any] | None] = {}
+    for friendly, code in POLICY_RATE_SERIES.items():
+        obs = _latest_non_null(series_map.get(code, []))
+        latest[friendly] = obs
+        rows.append(
+            {
+                "key": friendly,
+                "series_code": code,
+                "as_of": obs["date"] if obs else None,
+                "rate_pct": obs["value"] if obs else None,
+            }
+        )
+
+    policy = latest.get("policy_rate_1w_repo")
+    tlref = latest.get("tlref_overnight")
+    bist_repo = latest.get("bist_overnight_repo")
+
+    def _spread(a: dict[str, Any] | None, b: dict[str, Any] | None) -> float | None:
+        if not a or not b or a.get("value") is None or b.get("value") is None:
+            return None
+        return float(a["value"]) - float(b["value"])
+
+    spreads = {
+        "tlref_minus_policy_bps": (
+            _spread(tlref, policy) * 100 if _spread(tlref, policy) is not None else None
+        ),
+        "bist_overnight_minus_policy_bps": (
+            _spread(bist_repo, policy) * 100
+            if _spread(bist_repo, policy) is not None
+            else None
+        ),
+        "bist_overnight_minus_tlref_bps": (
+            _spread(bist_repo, tlref) * 100
+            if _spread(bist_repo, tlref) is not None
+            else None
+        ),
+    }
+
+    return {
+        "source": "TCMB EVDS — TL money-market panel (policy, TLREF, BIST O/N repo)",
+        "requested_as_of": as_of or end.isoformat(),
+        "panel": rows,
+        "spreads_bps": spreads,
+        "interpretation": (
+            "Positive tlref_minus_policy_bps means TL O/N funding is "
+            "trading above policy — typical sign of system-wide TL "
+            "tightness / TCMB allowing market rate to drift up. "
+            "bist_overnight_minus_tlref_bps measures sec-funding stress "
+            "(collateral quality premium). Sustained moves > +50bps are "
+            "unusual outside policy turning points."
+        ),
+        "notes": (
+            "The classic 'corridor' (APIFON1 borrowing / APIFON2 lending) "
+            "was retired by TCMB in 2024. This panel reports the current "
+            "effective short-end. For a tenor-bucketed DİBS yield curve "
+            "see get_yield_curve (v0.3 WIP)."
         ),
     }
 
@@ -273,18 +413,36 @@ async def get_bist_eod_ohlcv(
     ticker: str,
     since: str | None = None,
     until: str | None = None,
+    fmt: str = "json",
 ) -> dict[str, Any]:
-    """Daily OHLCV bars for a BIST symbol (Yahoo Finance backend, free, EOD)."""
+    """Daily OHLCV bars for a BIST symbol (Yahoo Finance backend, free, EOD).
+
+    Args:
+        fmt: 'json' returns full JSON array; 'compact' returns a CSV-style
+             string that saves ~70% LLM context tokens for long series.
+    """
     try:
         bars = await fetch_eod_ohlcv(ticker, since=since, until=until)
     except SourceError as e:
         return {"error": "bist_eod_error", "detail": str(e)}
 
-    return {
+    result: dict[str, Any] = {
         "source": "Yahoo Finance (BIST EOD)",
         "ticker": ticker,
         "count": len(bars),
-        "bars": [
+        "disclaimer": (
+            "EOD data is sourced from Yahoo Finance, which mirrors official "
+            "BIST closing prices but is not the primary source. Do not use "
+            "for clearing/settlement reconciliation."
+        ),
+    }
+
+    if fmt == "compact" and bars:
+        header = "date,open,high,low,close,volume"
+        rows = [f"{b.date},{b.open},{b.high},{b.low},{b.close},{b.volume}" for b in bars]
+        result["bars_csv"] = header + "\n" + "\n".join(rows)
+    else:
+        result["bars"] = [
             {
                 "date": b.date,
                 "open": b.open,
@@ -294,13 +452,8 @@ async def get_bist_eod_ohlcv(
                 "volume": b.volume,
             }
             for b in bars
-        ],
-        "disclaimer": (
-            "EOD data is sourced from Yahoo Finance, which mirrors official "
-            "BIST closing prices but is not the primary source. Do not use "
-            "for clearing/settlement reconciliation."
-        ),
-    }
+        ]
+    return result
 
 
 # -----------------------------------------------------------------------------
@@ -309,6 +462,7 @@ async def get_bist_eod_ohlcv(
 async def get_viop_settlement(
     trade_date: str | None = None,
     underlying: str | None = None,
+    fmt: str = "json",
 ) -> dict[str, Any]:
     """Live VIOP contract snapshot — last price, % change, volume, OI.
 
@@ -321,6 +475,10 @@ async def get_viop_settlement(
     marketwide aggregate margin / volume / OI dashboard use
     `get_viop_dashboard`. For per-contract official end-of-day settle
     prices, v0.3 will add a Takasbank-overnight pipeline.
+
+    Args:
+        fmt: 'json' returns full JSON; 'compact' returns a CSV-style
+             string that saves ~70% tokens for the full 480+ contract table.
     """
     try:
         rows = await fetch_daily_settlement(
@@ -331,12 +489,25 @@ async def get_viop_settlement(
             return wip_payload("viop", str(e))
         return {"error": "viop_error", "detail": str(e)}
 
-    return {
+    result: dict[str, Any] = {
         "source": "İş Yatırım — viop.aspx live contract snapshot",
         "trade_date": rows[0].trade_date if rows else trade_date,
         "underlying_filter": underlying,
         "count": len(rows),
-        "rows": [
+    }
+
+    if fmt == "compact" and rows:
+        header = "code,underlying,type,expiry,last,chg%,vol_tl,oi"
+        csv_rows = [
+            f"{r.contract.contract_code},{r.contract.underlying},"
+            f"{r.contract.contract_type},"
+            f"{r.contract.expiry_year}-{r.contract.expiry_month:02d},"
+            f"{r.last_price},{r.percent_change},{r.volume_tl},{r.open_interest}"
+            for r in rows
+        ]
+        result["rows_csv"] = header + "\n" + "\n".join(csv_rows)
+    else:
+        result["rows"] = [
             {
                 "contract_code": r.contract.contract_code,
                 "underlying": r.contract.underlying,
@@ -353,7 +524,186 @@ async def get_viop_settlement(
                 "open_interest": r.open_interest,
             }
             for r in rows
-        ],
+        ]
+    return result
+
+
+async def get_viop_option_chain(
+    underlying: str,
+    expiry_year: int | None = None,
+    expiry_month: int | None = None,
+    as_of: str | None = None,
+    spot_price: float | None = None,
+    risk_free_rate_pct: float | None = None,
+    dividend_yield_pct: float = 0.0,
+    solve_iv: bool = True,
+) -> dict[str, Any]:
+    """VIOP option chain for one underlying — strikes × calls/puts.
+
+    If `spot_price` and `risk_free_rate_pct` are provided and
+    `solve_iv=True`, each row's IV is solved from its last_price. ATM IV
+    and 25-delta skew (call - put) are reported when both wings can be
+    priced. Without spot/r the chain is returned without IV — last/% chg
+    /volume/OI only.
+
+    Args:
+        underlying: VIOP underlying (e.g. "XU030", "USD", "GARAN").
+        expiry_year, expiry_month: pin chain to one expiry. Both required
+            to filter; otherwise the full multi-expiry chain is returned.
+        spot_price: cash price of the underlying. Pull via get_bist_snapshot
+            for indices or via market data for equities.
+        risk_free_rate_pct: TL risk-free at the option's tenor. Pull the
+            relevant point of get_repo_curve / get_yield_curve.
+        solve_iv: if False, skip IV solve even when inputs are provided.
+    """
+    try:
+        rows = await fetch_option_chain(
+            underlying=underlying,
+            expiry_year=expiry_year,
+            expiry_month=expiry_month,
+            as_of=as_of,
+        )
+    except SourceError as e:
+        if "endpoint discovery pending" in str(e):
+            return wip_payload("viop", str(e))
+        return {"error": "viop_error", "detail": str(e)}
+
+    have_iv_inputs = (
+        solve_iv
+        and spot_price is not None
+        and risk_free_rate_pct is not None
+        and spot_price > 0
+    )
+
+    r = (risk_free_rate_pct or 0.0) / 100.0
+    q = (dividend_yield_pct or 0.0) / 100.0
+
+    # Cosmetic trade_date — pick from any row
+    trade_date = rows[0].trade_date if rows else (as_of or date.today().isoformat())
+    today = date.today()
+
+    out_rows: list[dict[str, Any]] = []
+    for s in rows:
+        c = s.contract
+        # Approximate days-to-expiry from VIOP convention: contracts expire
+        # the last business day of `expiry_month`; use end-of-month as a
+        # workable proxy. The IV solver is only mildly sensitive.
+        from calendar import monthrange
+
+        last_day = monthrange(c.expiry_year, c.expiry_month)[1]
+        try:
+            expiry_date = date(c.expiry_year, c.expiry_month, last_day)
+        except ValueError:
+            expiry_date = today
+        dte = max(1, (expiry_date - today).days)
+
+        iv_pct: float | None = None
+        if (
+            have_iv_inputs
+            and c.option_strike
+            and c.option_right
+            and s.last_price
+            and s.last_price > 0
+        ):
+            try:
+                iv = implied_volatility(
+                    market_price=float(s.last_price),
+                    spot=float(spot_price),
+                    strike=float(c.option_strike),
+                    time_to_expiry=dte / 365.0,
+                    risk_free_rate=r,
+                    dividend_yield=q,
+                    style=("call" if c.option_right == "C" else "put"),
+                )
+                iv_pct = iv * 100.0
+            except (ValueError, ArithmeticError):
+                iv_pct = None
+
+        out_rows.append(
+            {
+                "contract_code": c.contract_code,
+                "expiry_year": c.expiry_year,
+                "expiry_month": c.expiry_month,
+                "days_to_expiry": dte,
+                "strike": c.option_strike,
+                "right": c.option_right,
+                "last_price": s.last_price,
+                "percent_change": s.percent_change,
+                "volume_tl": s.volume_tl,
+                "open_interest": s.open_interest,
+                "iv_pct": iv_pct,
+            }
+        )
+
+    # ATM IV + 25-delta skew (per-expiry)
+    summary: list[dict[str, Any]] = []
+    if have_iv_inputs and out_rows:
+        by_expiry: dict[tuple[int, int], list[dict[str, Any]]] = {}
+        for r_ in out_rows:
+            if r_.get("strike") is None:
+                continue
+            by_expiry.setdefault((r_["expiry_year"], r_["expiry_month"]), []).append(r_)
+
+        for (yr, mo), group in by_expiry.items():
+            with_iv = [g for g in group if g.get("iv_pct") is not None]
+            if not with_iv:
+                continue
+            # ATM IV: row with strike closest to spot, averaging C/P if both
+            atm_strike = min(
+                {g["strike"] for g in with_iv},
+                key=lambda k: abs(k - float(spot_price)),
+            )
+            atm_rows = [g for g in with_iv if g["strike"] == atm_strike]
+            atm_iv = sum(g["iv_pct"] for g in atm_rows) / len(atm_rows)
+
+            # 25-delta skew: cheap approximation — pick strikes ±5% from spot
+            otm_call_strike = float(spot_price) * 1.05
+            otm_put_strike = float(spot_price) * 0.95
+
+            def _closest(side: str, target: float, _pool=with_iv) -> float | None:
+                cands = [g for g in _pool if g.get("right") == side]
+                if not cands:
+                    return None
+                pick = min(cands, key=lambda g: abs(g["strike"] - target))
+                return pick["iv_pct"]
+
+            call_wing = _closest("C", otm_call_strike)
+            put_wing = _closest("P", otm_put_strike)
+            skew_25d = (
+                call_wing - put_wing
+                if call_wing is not None and put_wing is not None
+                else None
+            )
+            summary.append(
+                {
+                    "expiry_year": yr,
+                    "expiry_month": mo,
+                    "atm_strike": atm_strike,
+                    "atm_iv_pct": atm_iv,
+                    "iv_25d_call_pct": call_wing,
+                    "iv_25d_put_pct": put_wing,
+                    "skew_25d_call_minus_put_pct": skew_25d,
+                }
+            )
+
+    return {
+        "source": "İş Yatırım — viop.aspx (options filtered & paired with IV math)",
+        "underlying": underlying,
+        "trade_date": trade_date,
+        "spot_price": spot_price,
+        "risk_free_rate_pct": risk_free_rate_pct,
+        "count": len(out_rows),
+        "iv_solved": have_iv_inputs,
+        "summary_by_expiry": summary,
+        "rows": out_rows,
+        "notes": (
+            "IV is solved from last_price; if your last_price is stale "
+            "(no trades) the IV will be noisy or unbracketable. Skew is "
+            "computed at ±5% strikes around spot — a fast proxy, not a "
+            "true 25-delta. days_to_expiry uses end-of-expiry-month; for "
+            "the official VIOP last-business-day rule the difference is "
+            "≤3 days and IV impact is small."
+        ),
     }
 
 
@@ -878,6 +1228,36 @@ def calculate_implied_volatility(
 
 
 # -----------------------------------------------------------------------------
+# Portfolio Greeks aggregator — pure math, no network
+# -----------------------------------------------------------------------------
+def aggregate_portfolio_greeks(
+    positions: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Net delta/gamma/vega/theta for a list of derivative + spot positions.
+
+    Each position is repriced with Black-Scholes (for options) or treated
+    as linear delta (futures/spot). Returns per-leg risk + totals + a
+    per-underlying rollup so a risk desk can spot concentration.
+
+    See `portfolio.py` docstring for the position schema. The function is
+    pure math — no network, no cache — so call it freely.
+    """
+    try:
+        return {
+            "source": "bist-trader-mcp — portfolio.aggregate_portfolio_greeks",
+            **_aggregate_portfolio_greeks(positions or []),
+            "notes": (
+                "Greeks are repriced from Black-Scholes; supply spot, strike, "
+                "days_to_expiry, and either volatility_pct or market_price for "
+                "each option. Futures/spot legs contribute linear delta only. "
+                "Theta_per_day = theta_per_year / 365."
+            ),
+        }
+    except (TypeError, ValueError) as e:
+        return {"error": "bad_input", "detail": str(e)}
+
+
+# -----------------------------------------------------------------------------
 # Hazine — DİBS auctions
 # -----------------------------------------------------------------------------
 async def get_dibs_auctions(
@@ -940,6 +1320,174 @@ async def get_dibs_auctions(
 
 
 # -----------------------------------------------------------------------------
+# Economic calendar — TCMB MPC + TÜİK CPI/PPI
+# -----------------------------------------------------------------------------
+def get_economic_calendar(
+    since: str | None = None,
+    until: str | None = None,
+    categories: list[str] | None = None,
+) -> dict[str, Any]:
+    """TR macro & policy event calendar within a date window.
+
+    Currently surfaces:
+        - TCMB PPK (MPC) announcement dates — high importance
+        - TÜİK TÜFE (CPI) release dates — 3rd business day each month
+        - TÜİK Yİ-ÜFE (PPI) release dates — same publication day
+
+    Args:
+        since: YYYY-MM-DD (default: today - 7 days).
+        until: YYYY-MM-DD (default: today + 90 days).
+        categories: optional filter — ['monetary_policy', 'inflation', ...].
+    """
+    today = date.today()
+    s = date.fromisoformat(since) if since else today - timedelta(days=7)
+    u = date.fromisoformat(until) if until else today + timedelta(days=90)
+    if s > u:
+        return {"error": "bad_window", "detail": "since must be <= until"}
+
+    events = _build_calendar(s, u, categories=categories)
+    return {
+        "source": (
+            "bist-trader-mcp — static TCMB MPC schedule + TÜİK release pattern. "
+            "MPC dates require yearly updating in calendar_data.py."
+        ),
+        "window": {"since": s.isoformat(), "until": u.isoformat()},
+        "categories_filter": categories,
+        "count": len(events),
+        "events": [
+            {
+                "date": e.date,
+                "event": e.event,
+                "category": e.category,
+                "importance": e.importance,
+                "notes": e.notes,
+            }
+            for e in events
+        ],
+        "notes": (
+            "TCMB MPC dates are authoritative until the year ends; TÜİK "
+            "publish-day rule (3rd business day) has held since 2010. "
+            "GSYH (GDP), işsizlik (unemployment), and external balance "
+            "release dates can be added when needed."
+        ),
+    }
+
+
+# -----------------------------------------------------------------------------
+# FX forward / swap curve via covered interest-rate parity
+# -----------------------------------------------------------------------------
+_FX_SPOT_SERIES: dict[str, str] = {
+    "USDTRY": USDTRY_SELLING,
+    "EURTRY": EURTRY_SELLING,
+}
+
+
+async def get_fx_forward_curve(
+    pair: str = "USDTRY",
+    foreign_rate_pct: float = 4.5,
+    spot: float | None = None,
+    domestic_rate_pct: float | None = None,
+    tenors: list[str] | None = None,
+    client: EVDSClient | None = None,
+) -> dict[str, Any]:
+    """CIP-implied FX forward curve for USDTRY or EURTRY.
+
+    If `spot` is not provided, the latest TCMB selling rate is fetched
+    from EVDS. If `domestic_rate_pct` is not provided, the current TCMB
+    1-week repo policy rate is used as the TL leg. The foreign leg must
+    be supplied by the caller (we don't have a Fed-funds / ECB feed) —
+    pass a sensible level (e.g. SOFR or EURIBOR closing) for the
+    tenor of interest.
+
+    Args:
+        pair: "USDTRY" or "EURTRY".
+        foreign_rate_pct: USD or EUR rate in percent.
+        spot: override spot. If None, pulled from EVDS.
+        domestic_rate_pct: override TL rate. If None, TCMB 1w policy used.
+        tenors: list of tenor strings (e.g. ["1W","1M","3M","6M","1Y"]).
+    """
+    pair_norm = pair.upper().strip()
+    if pair_norm not in _FX_SPOT_SERIES:
+        return {
+            "error": "unknown_pair",
+            "detail": f"pair must be one of {sorted(_FX_SPOT_SERIES)}",
+        }
+
+    client = client or EVDSClient()
+    today = date.today()
+    fetch_window_start = today - timedelta(days=14)
+
+    series_needed: list[str] = []
+    if spot is None:
+        series_needed.append(_FX_SPOT_SERIES[pair_norm])
+    if domestic_rate_pct is None:
+        series_needed.append(POLICY_RATE_SERIES["policy_rate_1w_repo"])
+
+    if series_needed:
+        try:
+            obs = await client.get_series(series_needed, start=fetch_window_start, end=today)
+        except EVDSError as e:
+            return {"error": "evds_error", "detail": str(e)}
+        series_map = _observations_to_series(obs)
+        if spot is None:
+            latest = _latest_non_null(series_map.get(_FX_SPOT_SERIES[pair_norm], []))
+            if not latest or latest["value"] is None:
+                return {
+                    "error": "spot_unavailable",
+                    "detail": f"EVDS returned no value for {pair_norm} in the last 14 days",
+                }
+            spot = float(latest["value"])
+        if domestic_rate_pct is None:
+            latest = _latest_non_null(
+                series_map.get(POLICY_RATE_SERIES["policy_rate_1w_repo"], [])
+            )
+            if not latest or latest["value"] is None:
+                return {
+                    "error": "domestic_rate_unavailable",
+                    "detail": "EVDS returned no value for TCMB 1w repo in the last 14 days",
+                }
+            domestic_rate_pct = float(latest["value"])
+
+    try:
+        points = _fx_forward_curve(
+            spot=spot,
+            domestic_rate_pct=domestic_rate_pct,
+            foreign_rate_pct=foreign_rate_pct,
+            tenors=tenors,
+        )
+    except (ValueError, ArithmeticError) as e:
+        return {"error": "calculation_failed", "detail": str(e)}
+
+    return {
+        "source": (
+            "TCMB EVDS (spot + TL policy rate) + caller-supplied foreign rate. "
+            "Forwards computed via covered interest-rate parity."
+        ),
+        "pair": pair_norm,
+        "spot": spot,
+        "domestic_rate_pct": domestic_rate_pct,
+        "foreign_rate_pct": foreign_rate_pct,
+        "implied_diff_pct": (domestic_rate_pct or 0.0) - foreign_rate_pct,
+        "curve": [
+            {
+                "tenor": p.tenor,
+                "days": p.days,
+                "forward_outright": p.forward_outright,
+                "forward_points_pips": p.forward_points_pips,
+            }
+            for p in points
+        ],
+        "notes": (
+            "Continuous compounding. Pip factor = 10,000 for 4-decimal "
+            "TRY quotes. The Turkish onshore forward market is illiquid "
+            "for non-bank participants; offshore NDF pricing typically "
+            "tracks CIP-implied + a credit/regulatory premium that has "
+            "ranged from a few bps to several hundred bps in stress."
+        ),
+    }
+
+
+# -----------------------------------------------------------------------------
 # Cross-asset — futures/spot basis fair value
 # -----------------------------------------------------------------------------
 def calculate_basis_fair_value(
@@ -995,4 +1543,1225 @@ def calculate_basis_fair_value(
             "consistently > 50bps over multiple days is unusual for liquid "
             "BIST30 / USDTRY futures."
         ),
+    }
+
+
+# -----------------------------------------------------------------------------
+# Real-time snapshot — "piyasa şu an ne durumda?"
+# -----------------------------------------------------------------------------
+async def get_bist_snapshot(
+    tickers: list[str],
+) -> dict[str, Any]:
+    """Latest price / change / volume snapshot for 1-10 BIST or FX tickers.
+
+    Backed by Yahoo Finance intraday data (15-min delayed). NOT real-time
+    in the exchange feed sense — but covers the critical "şu an fiyat ne?"
+    question.
+
+    Args:
+        tickers: BIST tickers (e.g. ["THYAO", "GARAN"]) or Yahoo symbols.
+            Accepts also aliases like "USDTRY", "XU100". Max 10 per call.
+    """
+    try:
+        snapshots = await _fetch_snapshot(tickers)
+    except SourceError as e:
+        return {"error": "snapshot_error", "detail": str(e)}
+
+    return {
+        "source": "Yahoo Finance (15-min delayed intraday)",
+        "count": len(snapshots),
+        "snapshots": [
+            {
+                "ticker": s.ticker,
+                "last_price": s.last_price,
+                "change": s.change,
+                "change_pct": s.change_pct,
+                "open": s.open,
+                "day_high": s.day_high,
+                "day_low": s.day_low,
+                "previous_close": s.previous_close,
+                "volume": s.volume,
+                "market_state": s.market_state,
+                "currency": s.currency,
+                "as_of": s.as_of,
+            }
+            for s in snapshots
+        ],
+        "disclaimer": (
+            "Prices are 15-minute delayed via Yahoo Finance. This is NOT a "
+            "real-time feed. Do not use for order execution or HFT. For "
+            "live L1/L2 data, use Matriks or Foreks."
+        ),
+    }
+
+
+async def get_market_summary() -> dict[str, Any]:
+    """One-shot overview of the Turkish market: indices, FX, commodities.
+
+    Returns current snapshot of:
+        - BIST indices: XU100, XU030, XBANK
+        - FX: USDTRY, EURTRY, GBPTRY
+        - Commodities: Gold (USD/oz), Brent crude
+        - Crypto: BTC/USD
+    All in a single parallel call. The "Bugün piyasa nasıl?" answer.
+    """
+    try:
+        summary = await _fetch_market_summary()
+    except SourceError as e:
+        return {"error": "summary_error", "detail": str(e)}
+
+    result: dict[str, Any] = {
+        "source": "Yahoo Finance (15-min delayed)",
+        "categories": {},
+    }
+
+    indices = {}
+    fx = {}
+    commodities = {}
+    crypto = {}
+
+    for alias, snap in summary.items():
+        entry = {
+            "last": snap.last_price,
+            "change": snap.change,
+            "change_pct": snap.change_pct,
+            "day_high": snap.day_high,
+            "day_low": snap.day_low,
+            "market_state": snap.market_state,
+        }
+        if alias in ("XU100", "XU030", "XBANK"):
+            indices[alias] = entry
+        elif alias in ("USDTRY", "EURTRY", "GBPTRY"):
+            fx[alias] = entry
+        elif alias in ("GOLD_USD", "BRENT"):
+            commodities[alias] = entry
+        elif alias in ("BTCUSD",):
+            crypto[alias] = entry
+
+    result["categories"] = {
+        "bist_indices": indices,
+        "fx": fx,
+        "commodities": commodities,
+        "crypto": crypto,
+    }
+
+    # Quick headline
+    xu100 = summary.get("XU100")
+    usdtry = summary.get("USDTRY")
+    headline_parts = []
+    if xu100 and xu100.last_price:
+        sign = "+" if (xu100.change_pct or 0) >= 0 else ""
+        headline_parts.append(f"XU100: {xu100.last_price:,.0f} ({sign}{xu100.change_pct:.2f}%)")
+    if usdtry and usdtry.last_price:
+        headline_parts.append(f"$/TL: {usdtry.last_price:.4f}")
+    if headline_parts:
+        result["headline"] = " | ".join(headline_parts)
+
+    result["disclaimer"] = (
+        "All prices are 15-minute delayed via Yahoo Finance. "
+        "Not suitable for real-time trading decisions."
+    )
+    return result
+
+
+# -----------------------------------------------------------------------------
+# VIOP IV surface + spread screener (v0.3)
+# -----------------------------------------------------------------------------
+async def get_viop_iv_surface(
+    underlying: str,
+    spot_price: float,
+    risk_free_rate_pct: float,
+    dividend_yield_pct: float = 0.0,
+    expiry_year: int | None = None,
+    expiry_month: int | None = None,
+    min_price: float = 0.01,
+) -> dict[str, Any]:
+    """Build a full IV surface from the live VIOP option chain.
+
+    Returns per-quote IV + delta + moneyness, an ATM term structure,
+    25-delta skew on the front month, and the front-vs-back vol slope.
+    Pair this output with `find_viop_spread_opportunities` to scan for
+    calendar / vertical / butterfly dislocations.
+
+    Args:
+        underlying: VIOP underlying (e.g. "XU030", "USD", "GARAN").
+        spot_price: cash price in the same units as strikes.
+        risk_free_rate_pct: TL risk-free at the option tenor (TLREF).
+        dividend_yield_pct: usually 0 for indices / FX.
+        expiry_year, expiry_month: pin to one expiry, else all expiries.
+        min_price: skip option quotes below this last_price (illiquid noise).
+    """
+    try:
+        chain = await fetch_option_chain(
+            underlying=underlying,
+            expiry_year=expiry_year,
+            expiry_month=expiry_month,
+        )
+    except SourceError as e:
+        return {"error": "viop_error", "detail": str(e)}
+
+    surface = build_iv_surface(
+        chain=chain,
+        spot=float(spot_price),
+        risk_free_rate_pct=float(risk_free_rate_pct),
+        dividend_yield_pct=float(dividend_yield_pct),
+        min_price=float(min_price),
+    )
+    surface["source"] = "bist-trader-mcp — iv_surface.build_iv_surface"
+    surface["underlying"] = underlying.upper()
+    return surface
+
+
+def find_viop_spread_opportunities(
+    surface: dict[str, Any],
+    strategy: str = "calendar",
+    min_edge_vol_pts: float = 3.0,
+    max_results: int = 20,
+) -> dict[str, Any]:
+    """Scan an IV surface for calendar / vertical / butterfly dislocations.
+
+    Call `get_viop_iv_surface` first and pass its return value as `surface`.
+
+    Args:
+        surface: output of get_viop_iv_surface.
+        strategy: "calendar" | "vertical" | "butterfly".
+        min_edge_vol_pts: ignore candidates with smaller IV dispersion.
+        max_results: cap on returned candidates.
+    """
+    try:
+        cands = find_spread_opportunities(
+            surface=surface,
+            strategy=strategy,
+            min_edge_vol_pts=float(min_edge_vol_pts),
+            max_results=int(max_results),
+        )
+    except ValueError as e:
+        return {"error": "bad_input", "detail": str(e)}
+    return {
+        "strategy": strategy,
+        "min_edge_vol_pts": min_edge_vol_pts,
+        "underlying": surface.get("underlying"),
+        "candidates": cands,
+        "notes": (
+            "Edge is in vol points (e.g. 5.0 = 5 IV%). Positive 'edge_vol_pts' "
+            "for calendars/butterflies means the front/wings are rich; for "
+            "verticals it's just the |Δσ| magnitude. These are candidates — "
+            "validate liquidity, bid-ask, and pin risk before trading."
+        ),
+    }
+
+
+# -----------------------------------------------------------------------------
+# Portfolio VaR + stress testing (v0.3)
+# -----------------------------------------------------------------------------
+def calculate_portfolio_var(
+    positions: list[dict[str, Any]],
+    confidence: float = 0.99,
+    horizon_days: int = 1,
+    annual_volatility_pct: float = 30.0,
+    method: str = "parametric",
+    historical_returns: list[float] | None = None,
+) -> dict[str, Any]:
+    """Portfolio Value-at-Risk under parametric or historical method.
+
+    Parametric: assumes normal returns at `annual_volatility_pct`. Adds a
+    gamma adjustment for short-convexity portfolios.
+
+    Historical: uses `historical_returns` (decimal daily returns of a
+    representative underlying) to compute the empirical quantile loss on
+    the delta-equivalent notional.
+
+    See `portfolio.calculate_portfolio_var` for full semantics.
+    """
+    try:
+        return {
+            "source": "bist-trader-mcp — portfolio.calculate_portfolio_var",
+            **_calc_var(
+                positions or [],
+                confidence=float(confidence),
+                horizon_days=int(horizon_days),
+                annual_volatility_pct=float(annual_volatility_pct),
+                method=str(method),
+                historical_returns=historical_returns,
+            ),
+            "notes": (
+                "Parametric VaR is a first-order risk number — pair with "
+                "stress_test_portfolio for non-linear scenarios. ES (Expected "
+                "Shortfall) is the average loss conditional on exceeding VaR."
+            ),
+        }
+    except (TypeError, ValueError) as e:
+        return {"error": "bad_input", "detail": str(e)}
+
+
+def stress_test_portfolio(
+    positions: list[dict[str, Any]],
+    scenarios: list[str] | None = None,
+    custom_scenarios: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Reprice the portfolio under named shock scenarios.
+
+    Built-in scenarios: rates+200bp, rates-200bp, tl_devalue_20pct,
+    xu030_-10pct, xu030_+10pct, vol_crush_-30pct_rel, vol_spike_+50pct_rel,
+    broad_-5pct, broad_+5pct.
+
+    Each result row contains pnl_amount, pnl_pct_of_gross, and the shock
+    spec applied. Results are sorted from worst to best P&L.
+    """
+    try:
+        return {
+            "source": "bist-trader-mcp — portfolio.stress_test_portfolio",
+            **_stress_test(
+                positions or [],
+                scenarios=scenarios,
+                custom_scenarios=custom_scenarios,
+            ),
+        }
+    except (TypeError, ValueError) as e:
+        return {"error": "bad_input", "detail": str(e)}
+
+
+# -----------------------------------------------------------------------------
+# Observability — cache + source health
+# -----------------------------------------------------------------------------
+def get_health_status() -> dict[str, Any]:
+    """Report freshness of cached data sources + Playwright availability.
+
+    Returns each known cache key's age + TTL, and a summary of whether the
+    optional browser-automation extras are installed.
+    """
+    from datetime import datetime, timezone
+
+    from ._browser import playwright_available
+    from ._cache import cache_path_for
+
+    tracked = [
+        ("takasbank.viop_margin_snapshot", 6 * 3600, "Takasbank VIOP dashboard"),
+        ("viop.snapshot", 3600, "İş Yatırım VIOP per-contract"),
+        ("mkk.market_stats:auto", 24 * 3600, "MKK monthly system stats"),
+    ]
+    rows = []
+    now = datetime.now(timezone.utc)
+    for key, ttl, label in tracked:
+        path = cache_path_for(key)
+        entry = {"key": key, "label": label, "ttl_seconds": ttl}
+        if not path.is_file():
+            entry["status"] = "no_cache"
+            entry["age_seconds"] = None
+            entry["fresh"] = False
+        else:
+            try:
+                import json as _json
+                with path.open("r", encoding="utf-8") as f:
+                    data = _json.load(f)
+                saved_at = datetime.fromisoformat(str(data.get("saved_at", "")))
+                if saved_at.tzinfo is None:
+                    saved_at = saved_at.replace(tzinfo=timezone.utc)
+                age = int((now - saved_at).total_seconds())
+                entry["status"] = "cached"
+                entry["age_seconds"] = age
+                entry["saved_at"] = saved_at.isoformat()
+                entry["fresh"] = age <= ttl
+            except Exception as e:
+                entry["status"] = f"cache_unreadable: {type(e).__name__}"
+                entry["age_seconds"] = None
+                entry["fresh"] = False
+        rows.append(entry)
+
+    return {
+        "source": "bist-trader-mcp — health",
+        "as_of": now.isoformat(),
+        "playwright_available": playwright_available(),
+        "evds_api_key_set": _evds_key_present(),
+        "caches": rows,
+        "notes": (
+            "fresh=true → most recent fetch is within TTL; false → next call "
+            "will hit the upstream. playwright_available=false disables the "
+            "Takasbank dashboard scraper."
+        ),
+    }
+
+
+def _evds_key_present() -> bool:
+    import os
+    return bool(os.environ.get("TCMB_EVDS_API_KEY"))
+
+
+# -----------------------------------------------------------------------------
+# Crypto — CoinGecko spot + Binance klines / funding / OI (v0.4)
+# -----------------------------------------------------------------------------
+async def get_crypto_spots(
+    coin_ids: list[str],
+    vs_currency: str = "usd",
+) -> dict[str, Any]:
+    """Spot snapshots for a list of CoinGecko coin slugs.
+
+    Examples: ["bitcoin", "ethereum", "solana", "binancecoin"].
+    Returns price, market cap, 24h volume, 24h and 7d % changes, ATH.
+    """
+    try:
+        spots = await fetch_coin_spots(coin_ids=coin_ids or [],
+                                       vs_currency=vs_currency)
+    except SourceError as e:
+        return {"error": "coingecko_error", "detail": str(e)}
+    return {
+        "source": "CoinGecko",
+        "vs_currency": vs_currency,
+        "coins": [s.__dict__ for s in spots],
+    }
+
+
+async def get_crypto_klines(
+    symbol: str,
+    interval: str = "1d",
+    limit: int = 200,
+) -> dict[str, Any]:
+    """OHLCV klines from Binance spot. Symbol e.g. 'BTCUSDT', 'ETHUSDT'.
+    Intervals: 1m,5m,15m,1h,4h,1d,1w. Max 1000 bars."""
+    try:
+        klines = await fetch_binance_klines(symbol=symbol, interval=interval,
+                                             limit=limit)
+    except SourceError as e:
+        return {"error": "binance_error", "detail": str(e)}
+    return {
+        "source": "Binance Spot",
+        "symbol": symbol.upper(),
+        "interval": interval,
+        "count": len(klines),
+        "klines": [k.__dict__ for k in klines],
+    }
+
+
+async def get_crypto_funding_rates(
+    symbol: str,
+    limit: int = 30,
+) -> dict[str, Any]:
+    """Recent funding rate history for a Binance USD-M perp.
+
+    A high positive funding rate means longs are paying shorts — typically
+    a sign of bullish leverage. Persistent positive funding often precedes
+    long squeezes.
+    """
+    try:
+        rates = await fetch_funding_rates(symbol=symbol, limit=limit)
+    except SourceError as e:
+        return {"error": "binance_fapi_error", "detail": str(e)}
+    avg = sum(r.funding_rate for r in rates) / len(rates) if rates else None
+    return {
+        "source": "Binance USD-M Futures",
+        "symbol": symbol.upper(),
+        "count": len(rates),
+        "average_funding_rate": avg,
+        "annualised_avg_pct": (avg * 3 * 365 * 100) if avg is not None else None,
+        "rates": [r.__dict__ for r in rates],
+    }
+
+
+async def get_crypto_open_interest(
+    symbol: str,
+    period: str = "1h",
+    limit: int = 30,
+) -> dict[str, Any]:
+    """Open interest history for a Binance USD-M perp."""
+    try:
+        oi = await fetch_open_interest_history(symbol=symbol, period=period,
+                                                limit=limit)
+    except SourceError as e:
+        return {"error": "binance_fapi_error", "detail": str(e)}
+    return {
+        "source": "Binance USD-M Futures",
+        "symbol": symbol.upper(),
+        "period": period,
+        "count": len(oi),
+        "open_interest_history": oi,
+    }
+
+
+# -----------------------------------------------------------------------------
+# Global spot FX (Frankfurter / ECB) — v0.4
+# -----------------------------------------------------------------------------
+async def get_global_fx_spot(pair: str) -> dict[str, Any]:
+    """Latest ECB reference rate for a major FX pair (e.g. EURUSD)."""
+    try:
+        spot = await fetch_fx_spot(pair=pair)
+    except SourceError as e:
+        return {"error": "fx_error", "detail": str(e)}
+    return {
+        "source": "ECB via Frankfurter",
+        "pair": f"{spot.base}{spot.quote}",
+        "rate": spot.rate,
+        "as_of": spot.as_of,
+        "notes": "Daily ECB reference, updated ~16:00 CET; not intraday.",
+    }
+
+
+async def get_global_fx_history(pair: str, days: int = 30) -> dict[str, Any]:
+    """Daily history of a major FX pair (ECB reference rates)."""
+    try:
+        rows = await fetch_fx_history(pair=pair, days=days)
+    except SourceError as e:
+        return {"error": "fx_error", "detail": str(e)}
+    return {
+        "source": "ECB via Frankfurter",
+        "pair": pair.upper(),
+        "count": len(rows),
+        "history": rows,
+    }
+
+
+async def get_global_fx_matrix(
+    bases: list[str] | None = None,
+    quotes: list[str] | None = None,
+) -> dict[str, Any]:
+    """N×M FX rate matrix for G10/EM screening. Defaults to G10 × EM majors."""
+    from .global_fx import EM_QUOTES, G10_BASES
+    bs = bases or G10_BASES
+    qs = quotes or EM_QUOTES
+    try:
+        matrix = await fetch_fx_matrix(bases=bs, quotes=qs)
+    except SourceError as e:
+        return {"error": "fx_error", "detail": str(e)}
+    return {
+        "source": "ECB via Frankfurter",
+        "bases": bs,
+        "quotes": qs,
+        "matrix": matrix,
+    }
+
+
+# -----------------------------------------------------------------------------
+# Global markets pulse — indices, treasuries, commodities, crypto (v0.4)
+# -----------------------------------------------------------------------------
+async def get_global_pulse(
+    categories: list[str] | None = None,
+) -> dict[str, Any]:
+    """One-shot global market snapshot bucketed by category.
+
+    Categories: indices | treasuries | commodities | crypto.
+    Default: all four.
+
+    Returns SPX/NDX/DAX/FTSE/N225/HSI for indices,
+    UST 3M/5Y/10Y/30Y yields, WTI/Brent/Gold/Silver/Copper/Natgas, and
+    BTC/ETH/SOL/etc. Each with last price, change, % change.
+    """
+    try:
+        pulse = await fetch_global_pulse(categories=categories)
+    except SourceError as e:
+        return {"error": "global_pulse_error", "detail": str(e)}
+
+    out: dict[str, Any] = {
+        "source": "Yahoo Finance (delayed)",
+        "categories": {},
+    }
+    for cat, bucket in pulse.items():
+        rendered = {}
+        for alias, snap in bucket.items():
+            rendered[alias] = {
+                "last": snap.last_price,
+                "change": snap.change,
+                "change_pct": snap.change_pct,
+                "day_high": snap.day_high,
+                "day_low": snap.day_low,
+                "currency": snap.currency,
+                "market_state": snap.market_state,
+            }
+        out["categories"][cat] = rendered
+    return out
+
+
+# -----------------------------------------------------------------------------
+# Technical indicators — pure math on any OHLCV series (v0.4)
+# -----------------------------------------------------------------------------
+def calculate_technicals(
+    closes: list[float],
+    highs: list[float] | None = None,
+    lows: list[float] | None = None,
+) -> dict[str, Any]:
+    """Standard indicator snapshot from a closes series (and optional H/L).
+
+    Indicators returned at the last bar:
+      - SMA 20/50/200, EMA 12/26
+      - RSI(14) + label (overbought/oversold/neutral)
+      - MACD (12/26/9): macd line, signal, histogram
+      - Bollinger Bands (20, 2σ): upper/lower/%B + label
+      - ATR(14) if H/L provided
+
+    Plus three categorical labels: trend (bullish/bearish/neutral),
+    rsi (overbought/oversold/neutral), and bb (upper/lower/mid_band).
+    """
+    try:
+        snap = _tech_snapshot(closes=closes or [], highs=highs, lows=lows)
+    except (TypeError, ValueError) as e:
+        return {"error": "bad_input", "detail": str(e)}
+    return {
+        "source": "bist-trader-mcp — technicals.compute_snapshot",
+        "bars_in": len(closes or []),
+        "snapshot": snap.__dict__,
+        "notes": (
+            "All indicators evaluated at the last bar of `closes`. Pass H/L "
+            "of equal length to enable ATR. RSI labels use 30/70 default "
+            "thresholds; BB labels at %B 0.05/0.95."
+        ),
+    }
+
+
+# -----------------------------------------------------------------------------
+# Crypto Fear & Greed (v0.5)
+# -----------------------------------------------------------------------------
+async def get_crypto_fear_greed(limit: int = 30) -> dict[str, Any]:
+    """Crypto Fear & Greed Index history (alternative.me).
+
+    0-25 Extreme Fear → 75-100 Extreme Greed. A composite of momentum,
+    volume, social, dominance, and Google Trends. Contrarian signal.
+    """
+    try:
+        points = await fetch_fear_greed(limit=limit)
+    except SourceError as e:
+        return {"error": "fng_error", "detail": str(e)}
+    latest = points[0] if points else None
+    return {
+        "source": "alternative.me",
+        "latest": latest.__dict__ if latest else None,
+        "count": len(points),
+        "history": [p.__dict__ for p in points],
+        "notes": (
+            "Data is daily. 'Extreme Fear' (≤25) historically a buy zone, "
+            "'Extreme Greed' (≥75) a caution zone — both contrarian signals."
+        ),
+    }
+
+
+# -----------------------------------------------------------------------------
+# Deribit BTC/ETH option chain + surface (v0.5)
+# -----------------------------------------------------------------------------
+async def get_deribit_iv_surface(
+    currency: str = "BTC",
+    spot_price: float | None = None,
+) -> dict[str, Any]:
+    """Build the live IV surface for BTC or ETH options on Deribit.
+
+    Deribit publishes server-computed mark_iv already, so this is fast.
+    If `spot_price` is omitted, the latest Binance perp price is fetched.
+
+    Output shape mirrors get_viop_iv_surface so the same prompts /
+    Pine recipes work for crypto.
+    """
+    try:
+        chain = await fetch_deribit_option_chain(currency=currency)
+    except SourceError as e:
+        return {"error": "deribit_error", "detail": str(e)}
+
+    # If user didn't supply spot, infer via Binance index price
+    if spot_price is None:
+        from .crypto import fetch_binance_klines
+        try:
+            klines = await fetch_binance_klines(
+                symbol=f"{currency}USDT", interval="1m", limit=1,
+            )
+            spot_price = klines[-1].close if klines else None
+        except SourceError:
+            spot_price = None
+
+    if not spot_price:
+        return {"error": "no_spot", "detail":
+                "spot_price unavailable; pass spot_price explicitly"}
+
+    surface = build_deribit_surface(chain=chain, spot=float(spot_price))
+    surface["source"] = "Deribit"
+    return surface
+
+
+# -----------------------------------------------------------------------------
+# Correlation analytics (v0.5)
+# -----------------------------------------------------------------------------
+def calculate_correlation_matrix(
+    series: dict[str, list[float]],
+    method: str = "log",
+) -> dict[str, Any]:
+    """Pairwise correlation matrix of returns across multiple assets.
+
+    Args:
+        series: {asset_name: closes_list}. All inputs trimmed to the
+            common minimum length.
+        method: 'log' (default) or 'simple' return method.
+
+    Returns the full N×N matrix, plus a top-10 by |ρ| and a bottom-10
+    (most diversifying) ranking.
+    """
+    try:
+        out = _correlation_matrix(series=series or {}, method=method)
+    except (TypeError, ValueError) as e:
+        return {"error": "bad_input", "detail": str(e)}
+    return {
+        "source": "bist-trader-mcp — correlation.correlation_matrix",
+        **out,
+    }
+
+
+# -----------------------------------------------------------------------------
+# Option strategy P&L simulator (v0.6)
+# -----------------------------------------------------------------------------
+def simulate_option_strategy(
+    template: str | None = None,
+    template_args: dict[str, Any] | None = None,
+    legs: list[dict[str, Any]] | None = None,
+    spot_low: float = 0.0,
+    spot_high: float = 0.0,
+    spot_steps: int = 41,
+    risk_free_rate_pct: float = 0.0,
+    dividend_yield_pct: float = 0.0,
+    days_forward: float = 0,
+    at_expiry: bool = True,
+) -> dict[str, Any]:
+    """Simulate an option strategy's P&L across a spot range.
+
+    Two ways to define the strategy:
+    1. Use a template: `template='long_straddle'`, `template_args={...}`.
+       Available templates: long_straddle, short_straddle, long_strangle,
+       iron_condor, butterfly, vertical_spread.
+    2. Pass custom `legs` directly (dicts with instrument_type, qty,
+       strike, right, days_to_expiry, volatility_pct, entry_price).
+
+    Returns the full P&L grid plus max profit/loss, breakevens, and net
+    debit/credit. Use `at_expiry=False` with `days_forward=N` to see
+    P&L mid-life rather than at expiry.
+    """
+    try:
+        if template:
+            tmpl = STRATEGY_TEMPLATES.get(template)
+            if tmpl is None:
+                return {"error": "unknown_template",
+                        "detail": f"templates: {list(STRATEGY_TEMPLATES)}"}
+            strat_legs = tmpl(**(template_args or {}))
+        elif legs:
+            strat_legs = [
+                StrategyLeg(
+                    instrument_type=str(leg.get("instrument_type", "option")),
+                    qty=float(leg.get("qty", 0)),
+                    strike=leg.get("strike"),
+                    right=leg.get("right"),
+                    days_to_expiry=leg.get("days_to_expiry"),
+                    volatility_pct=leg.get("volatility_pct"),
+                    entry_price=leg.get("entry_price"),
+                    multiplier=float(leg.get("multiplier", 1.0)),
+                )
+                for leg in legs
+            ]
+        else:
+            return {"error": "missing_input",
+                    "detail": "pass either template+template_args or legs"}
+
+        if spot_low <= 0 or spot_high <= 0:
+            # Auto-range from strikes
+            strikes = [leg.strike for leg in strat_legs if leg.strike]
+            if strikes:
+                mid = sum(strikes) / len(strikes)
+                spot_low = mid * 0.7
+                spot_high = mid * 1.3
+            else:
+                return {"error": "missing_input",
+                        "detail": "spot_low/spot_high required when no strikes"}
+
+        result = simulate_strategy(
+            legs=strat_legs,
+            spot_range=(spot_low, spot_high),
+            spot_steps=int(spot_steps),
+            risk_free_rate_pct=float(risk_free_rate_pct),
+            dividend_yield_pct=float(dividend_yield_pct),
+            days_forward=float(days_forward),
+            at_expiry=bool(at_expiry),
+        )
+        return {
+            "source": "bist-trader-mcp — strategies.simulate_strategy",
+            "template": template,
+            **result,
+        }
+    except (TypeError, ValueError) as e:
+        return {"error": "bad_input", "detail": str(e)}
+
+
+def list_strategy_templates() -> dict[str, Any]:
+    """List available strategy templates with their required args."""
+    return {
+        "templates": list(STRATEGY_TEMPLATES.keys()),
+        "details": {
+            "long_straddle": "strike, dte, vol_pct, [qty, multiplier, entry_call, entry_put]",
+            "short_straddle": "strike, dte, vol_pct, [qty, multiplier, entry_call, entry_put]",
+            "long_strangle": "put_strike, call_strike, dte, vol_pct, [...]",
+            "iron_condor": "put_low, put_high, call_low, call_high, dte, vol_pct, [...]",
+            "butterfly": "low, mid, high, right ('call'|'put'), dte, vol_pct, [...]",
+            "vertical_spread":
+                "low_strike, high_strike, right, direction ('bull'|'bear'), dte, vol_pct",
+        },
+    }
+
+
+# -----------------------------------------------------------------------------
+# Realized volatility (v0.6)
+# -----------------------------------------------------------------------------
+def calculate_realized_vol(
+    closes: list[float],
+    opens: list[float] | None = None,
+    highs: list[float] | None = None,
+    lows: list[float] | None = None,
+    period: int = 30,
+    annualise_days: int = 252,
+    iv_atm_pct: float | None = None,
+) -> dict[str, Any]:
+    """Realized volatility panel: close-to-close, Parkinson, Garman-Klass.
+
+    Provide just `closes` for CC; add highs+lows for Parkinson; add opens
+    too for Garman-Klass. If `iv_atm_pct` (e.g. from get_viop_iv_surface
+    or get_deribit_iv_surface) is supplied, returns IV/RV ratio and
+    spread in vol points — the classic option mean-reversion signal.
+
+    For crypto, set `annualise_days=365` (24/7 trading).
+    """
+    try:
+        out = realized_vol_panel(
+            opens=opens, highs=highs, lows=lows,
+            closes=closes or [],
+            period=int(period),
+            annualise_days=int(annualise_days),
+            iv_atm_pct=iv_atm_pct,
+        )
+    except (TypeError, ValueError) as e:
+        return {"error": "bad_input", "detail": str(e)}
+    return {
+        "source": "bist-trader-mcp — realized_vol.realized_vol_panel",
+        "bars_in": len(closes or []),
+        **out,
+        "notes": (
+            "All vols annualised, percent units. CC underestimates intraday "
+            "moves; Parkinson is ~5x more efficient; GK ~7x. Use the most "
+            "data-rich estimator available."
+        ),
+    }
+
+
+# -----------------------------------------------------------------------------
+# News headlines (v0.6)
+# -----------------------------------------------------------------------------
+async def get_news_headlines(
+    feeds: list[str] | None = None,
+    limit_per_feed: int = 10,
+) -> dict[str, Any]:
+    """Financial news headlines from curated free RSS feeds.
+
+    Available feeds: investing_top, investing_commodities, investing_fx,
+    investing_economy, investing_crypto, yahoo_markets, reuters_business,
+    coindesk. Default: investing_top + investing_economy + yahoo_markets.
+    """
+    try:
+        items = await fetch_news(feeds=feeds, limit_per_feed=limit_per_feed)
+    except SourceError as e:
+        return {"error": "news_error", "detail": str(e)}
+    return {
+        "source": "RSS aggregator",
+        "feeds_available": list(NEWS_FEEDS.keys()),
+        "feeds_used": feeds or ["investing_top", "investing_economy", "yahoo_markets"],
+        "count": len(items),
+        "headlines": [i.__dict__ for i in items],
+    }
+
+
+# -----------------------------------------------------------------------------
+# Backtest + performance + optimizer + Kelly (v0.8)
+# -----------------------------------------------------------------------------
+def backtest_strategy(
+    closes: list[float],
+    signals: list[float] | None = None,
+    signal_generator: str | None = None,
+    signal_args: dict[str, Any] | None = None,
+    initial_equity: float = 100000.0,
+    commission_pct: float = 0.05,
+    slippage_pct: float = 0.05,
+    risk_free_pct: float = 0.0,
+    periods_per_year: int = 252,
+) -> dict[str, Any]:
+    """Event-driven backtest with cost model + full performance panel.
+
+    Provide either `signals` directly, or `signal_generator` name from
+    {sma_crossover, rsi_thresholds, bollinger_mean_reversion} with
+    `signal_args` (e.g. {fast: 20, slow: 50}).
+
+    Returns the full equity curve, returns, trades, and a performance
+    panel (Sharpe, Sortino, Calmar, max drawdown, trade stats).
+    """
+    try:
+        if signals is None:
+            if signal_generator is None:
+                return {"error": "missing_input",
+                        "detail": "pass either signals or signal_generator"}
+            gen = SIGNAL_GENERATORS.get(signal_generator)
+            if gen is None:
+                return {"error": "unknown_generator",
+                        "detail": f"available: {list(SIGNAL_GENERATORS)}"}
+            signals = gen(closes=closes or [], **(signal_args or {}))
+
+        result = run_backtest(
+            closes=closes or [],
+            signals=signals or [],
+            initial_equity=float(initial_equity),
+            commission_pct=float(commission_pct),
+            slippage_pct=float(slippage_pct),
+            risk_free_pct=float(risk_free_pct),
+            periods_per_year=int(periods_per_year),
+        )
+        return {
+            "source": "bist-trader-mcp — backtest.run_backtest",
+            "signal_generator": signal_generator,
+            **result,
+        }
+    except (TypeError, ValueError) as e:
+        return {"error": "bad_input", "detail": str(e)}
+
+
+def list_signal_generators() -> dict[str, Any]:
+    """List available built-in signal generators and their args."""
+    return {
+        "generators": list(SIGNAL_GENERATORS.keys()),
+        "details": {
+            "sma_crossover": "fast (int), slow (int), allow_short (bool)",
+            "rsi_thresholds":
+                "period (int=14), oversold (float=30), overbought (float=70), allow_short",
+            "bollinger_mean_reversion": "period (int=20), std_dev (float=2.0), allow_short",
+        },
+    }
+
+
+def calculate_performance_panel(
+    returns: list[float],
+    equity_curve: list[float] | None = None,
+    trade_pnls: list[float] | None = None,
+    risk_free_pct: float = 0.0,
+    periods_per_year: int = 252,
+) -> dict[str, Any]:
+    """Standalone performance panel: Sharpe, Sortino, Calmar, max drawdown,
+    annualised return/vol, trade stats (win rate, profit factor, expectancy).
+    """
+    try:
+        panel = performance_panel(
+            returns=returns or [],
+            equity_curve=equity_curve,
+            trade_pnls=trade_pnls,
+            risk_free_pct=float(risk_free_pct),
+            periods_per_year=int(periods_per_year),
+        )
+    except (TypeError, ValueError) as e:
+        return {"error": "bad_input", "detail": str(e)}
+    return {
+        "source": "bist-trader-mcp — performance.performance_panel",
+        **panel,
+    }
+
+
+def optimize_portfolio_markowitz(
+    series: dict[str, list[float]],
+    target_return_pct: float | None = None,
+    risk_free_pct: float = 0.0,
+    periods_per_year: int = 252,
+) -> dict[str, Any]:
+    """Markowitz portfolio optimization.
+
+    Returns min-variance portfolio, max-Sharpe (tangency) portfolio, an
+    optional target-return portfolio, and a 25-point efficient frontier.
+
+    Shorting is allowed (unconstrained closed-form). For long-only, pick
+    points from the frontier where all weights are positive.
+
+    Pass {asset_name: closes_list} — sample covariance is computed from
+    log returns. Min sample size: 30 observations per asset.
+    """
+    try:
+        return {
+            "source": "bist-trader-mcp — portfolio_opt.optimize_portfolio",
+            **optimize_portfolio(
+                series=series or {},
+                target_return_pct=target_return_pct,
+                risk_free_pct=float(risk_free_pct),
+                periods_per_year=int(periods_per_year),
+            ),
+        }
+    except (TypeError, ValueError) as e:
+        return {"error": "bad_input", "detail": str(e)}
+
+
+def calculate_kelly_sizing(
+    win_probability: float | None = None,
+    win_loss_ratio: float | None = None,
+    annualised_return_pct: float | None = None,
+    annualised_volatility_pct: float | None = None,
+    risk_free_pct: float = 0.0,
+    kelly_fractions: list[float] | None = None,
+) -> dict[str, Any]:
+    """Kelly sizing panel — bet Kelly + continuous Kelly + fractional.
+
+    Provide either (win_probability, win_loss_ratio) for bet Kelly, or
+    (annualised_return_pct, annualised_volatility_pct) for continuous,
+    or both for cross-check.
+    """
+    try:
+        return {
+            "source": "bist-trader-mcp — kelly.kelly_panel",
+            **kelly_panel(
+                win_probability=win_probability,
+                win_loss_ratio=win_loss_ratio,
+                annualised_return_pct=annualised_return_pct,
+                annualised_volatility_pct=annualised_volatility_pct,
+                risk_free_pct=float(risk_free_pct),
+                kelly_fractions=kelly_fractions,
+            ),
+        }
+    except (TypeError, ValueError) as e:
+        return {"error": "bad_input", "detail": str(e)}
+
+
+def calculate_atr_position_size(
+    equity: float,
+    entry_price: float,
+    atr: float,
+    atr_multiple_stop: float = 2.0,
+    risk_per_trade_pct: float = 1.0,
+) -> dict[str, Any]:
+    """Volatility-based position sizing using ATR-based stop loss.
+
+    Sizes a trade so a loss at the ATR-multiple stop equals
+    `risk_per_trade_pct`% of equity. Canonical "1% rule" for trend-following.
+    """
+    try:
+        return {
+            "source": "bist-trader-mcp — kelly.position_size_from_atr",
+            **position_size_from_atr(
+                equity=float(equity),
+                entry_price=float(entry_price),
+                atr=float(atr),
+                atr_multiple_stop=float(atr_multiple_stop),
+                risk_per_trade_pct=float(risk_per_trade_pct),
+            ),
+        }
+    except (TypeError, ValueError) as e:
+        return {"error": "bad_input", "detail": str(e)}
+
+
+# -----------------------------------------------------------------------------
+# Volatility forecasting (v0.7)
+# -----------------------------------------------------------------------------
+def calculate_ewma_volatility(
+    returns: list[float],
+    decay: float = 0.94,
+    annualise_days: int = 252,
+) -> dict[str, Any]:
+    """EWMA (RiskMetrics) volatility forecast on a returns series.
+
+    Pass log returns (use calculate_correlation_matrix's helper or just
+    diff(log(closes))). Default decay 0.94 is the RiskMetrics convention
+    for daily; use 0.97 for higher persistence. For crypto set
+    annualise_days=365.
+    """
+    try:
+        out = ewma_volatility(
+            returns=returns or [],
+            decay=float(decay),
+            annualise_days=int(annualise_days),
+        )
+    except (TypeError, ValueError) as e:
+        return {"error": "bad_input", "detail": str(e)}
+    return {
+        "source": "bist-trader-mcp — vol_forecast.ewma_volatility",
+        **out,
+    }
+
+
+def calculate_garch_forecast(
+    returns: list[float],
+    horizon_days: int = 20,
+    annualise_days: int = 252,
+) -> dict[str, Any]:
+    """Fit GARCH(1,1) (coarse grid MLE) and forecast a `horizon_days` vol path.
+
+    Returns the fitted (ω, α, β), the stationary long-run vol, the 1-step
+    forecast, and the full forecast path in annualised %.
+    """
+    try:
+        out = garch_forecast(
+            returns=returns or [],
+            horizon_days=int(horizon_days),
+            annualise_days=int(annualise_days),
+        )
+    except (TypeError, ValueError) as e:
+        return {"error": "bad_input", "detail": str(e)}
+    return {
+        "source": "bist-trader-mcp — vol_forecast.garch_forecast",
+        **out,
+        "notes": (
+            "GARCH parameters are coarse grid MLE (8³ trials). Adequate for "
+            "risk overlays and IV/RV comparison but not portfolio-grade. "
+            "α+β close to 1 → highly persistent vol; stationary_vol_pct is "
+            "the unconditional long-run level."
+        ),
+    }
+
+
+# -----------------------------------------------------------------------------
+# BIST sector rotation (v0.7)
+# -----------------------------------------------------------------------------
+async def get_bist_sector_rotation(
+    sectors: list[str] | None = None,
+    period: str = "3mo",
+    lookback_bars: int = 21,
+    include_benchmark: bool = True,
+) -> dict[str, Any]:
+    """Rotation analytics across BIST sector indices.
+
+    Computes total return, recent (5-bar) return, and relative strength vs.
+    XU100 over `lookback_bars` for each sector. Returns ranked sectors
+    (strongest first), top-3 + bottom-3 lists.
+
+    Args:
+        sectors: subset of BIST sectors (XBANK, XUSIN, XGIDA, ...).
+            Defaults to all 17 sector indices.
+        period: Yahoo Finance EOD range (1mo, 3mo, 6mo, 1y).
+        lookback_bars: window for total return ranking (default 21).
+        include_benchmark: pull XU100 too for relative-strength calc.
+    """
+    try:
+        sector_closes = await fetch_sector_closes(sectors=sectors, period=period)
+    except SourceError as e:
+        return {"error": "bist_eod_error", "detail": str(e)}
+
+    benchmark_closes = None
+    if include_benchmark:
+        try:
+            from .bist_eod import fetch_eod_ohlcv
+            bench = await fetch_eod_ohlcv("^XU100", period=period)
+            benchmark_closes = [b["close"] for b in bench if b.get("close")]
+        except SourceError:
+            benchmark_closes = None
+
+    metrics = compute_rotation_metrics(
+        sector_closes=sector_closes,
+        benchmark_closes=benchmark_closes,
+        lookback_bars=int(lookback_bars),
+    )
+    return {
+        "source": "bist-trader-mcp — bist_sectors",
+        "benchmark": "XU100" if benchmark_closes else None,
+        "available_sectors": list(BIST_SECTORS),
+        **metrics,
+    }
+
+
+# -----------------------------------------------------------------------------
+# On-chain — ETH gas + BTC network stats (v0.7)
+# -----------------------------------------------------------------------------
+async def get_eth_gas_oracle() -> dict[str, Any]:
+    """Etherscan gas oracle — safe/propose/fast gas in Gwei + base fee.
+
+    High fast gas (>50 Gwei) often coincides with NFT/airdrop activity or
+    risk-on flow; sub-15 Gwei signals quiet markets. Optional
+    ETHERSCAN_API_KEY env raises rate limit but no key works at 1 req/5s.
+    """
+    try:
+        snap = await fetch_eth_gas_oracle()
+    except SourceError as e:
+        return {"error": "etherscan_error", "detail": str(e)}
+    return {
+        "source": "Etherscan",
+        **snap.__dict__,
+        "notes": (
+            "Gas in Gwei. Suggested base fee is the EIP-1559 baseline. "
+            "Rapid gas spikes can indicate large on-chain activity."
+        ),
+    }
+
+
+async def get_btc_network_stats() -> dict[str, Any]:
+    """Bitcoin network: hashrate, difficulty, supply, mempool.
+
+    From blockchain.info public endpoints — no auth needed.
+    """
+    try:
+        snap = await fetch_btc_network_stats()
+    except SourceError as e:
+        return {"error": "blockchain_info_error", "detail": str(e)}
+    return {
+        "source": "blockchain.info",
+        **snap.__dict__,
+    }
+
+
+# -----------------------------------------------------------------------------
+# Nelson-Siegel-Svensson yield curve fitting (v0.7)
+# -----------------------------------------------------------------------------
+def fit_yield_curve_nss(
+    maturities_years: list[float],
+    yields_pct: list[float],
+    use_svensson: bool = True,
+    output_tenors_years: list[float] | None = None,
+) -> dict[str, Any]:
+    """Fit Nelson-Siegel (3 betas + 1 λ) or NSS (4 betas + 2 λs) to a
+    discrete yield curve and evaluate at any tenor.
+
+    Used to derive a 3.5Y yield when only 2Y/5Y are observed, or to
+    smooth noisy DİBS auction yields into a continuous curve.
+
+    Args:
+        maturities_years: list of observed τ in years.
+        yields_pct: matching yields in percent.
+        use_svensson: True → NSS (better fits for two humps), False → NS.
+        output_tenors_years: list of tenors to evaluate. Default: 0.25, 0.5,
+            1, 2, 3, 5, 7, 10, 15, 20, 30.
+    """
+    if output_tenors_years is None:
+        output_tenors_years = [0.25, 0.5, 1, 2, 3, 5, 7, 10, 15, 20, 30]
+    try:
+        params = fit_nelson_siegel(
+            maturities_years=maturities_years or [],
+            yields_pct=yields_pct or [],
+            use_svensson=bool(use_svensson),
+        )
+    except (TypeError, ValueError) as e:
+        return {"error": "bad_input", "detail": str(e)}
+
+    grid = evaluate_curve_grid(params, output_tenors_years)
+    return {
+        "source": "bist-trader-mcp — yield_fitter (NSS)",
+        "params": params.__dict__,
+        "fitted_curve": grid,
+        "model": "NSS" if use_svensson else "NS",
+        "notes": (
+            "β₀ = long-rate, -β₁ = slope, β₂ = curvature near λ₁, β₃ = "
+            "second curvature near λ₂ (NSS only). RMSE in percent."
+        ),
+    }
+
+
+def calculate_rolling_correlation(
+    series_a: list[float],
+    series_b: list[float],
+    window: int = 30,
+    method: str = "log",
+) -> dict[str, Any]:
+    """Rolling correlation between two return series.
+
+    Useful for spotting regime changes: e.g. when BTC-SPX correlation
+    flips from -0.3 to +0.6 it suggests risk-on/risk-off behaviour has
+    started dominating crypto.
+    """
+    try:
+        vals = _rolling_correlation(
+            series_a=series_a or [],
+            series_b=series_b or [],
+            window=int(window),
+            method=method,
+        )
+    except (TypeError, ValueError) as e:
+        return {"error": "bad_input", "detail": str(e)}
+    return {
+        "source": "bist-trader-mcp — correlation.rolling_correlation",
+        "window": window,
+        "method": method,
+        "rolling_correlation": vals,
+        "latest": next((v for v in reversed(vals) if v is not None), None),
     }

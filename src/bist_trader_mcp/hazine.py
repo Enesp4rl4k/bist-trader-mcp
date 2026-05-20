@@ -31,10 +31,8 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any
 
-import httpx
-
 from ._cache import cache_get, cache_set
-from .http_utils import USER_AGENT, SourceError
+from .http_utils import SourceError, fetch_bytes
 
 # v0.1 registry — append the latest known strategy URL on each release.
 # Indexed by the calendar starting month so we can pick the most recent
@@ -182,16 +180,11 @@ def _pick_strategy_url(reference: date) -> str:
     return QUARTERLY_STRATEGY_URLS[chosen]
 
 
-def _download_pdf(url: str) -> bytes:
+async def _download_pdf(url: str) -> bytes:
     try:
-        with httpx.Client(
-            timeout=30.0, headers={"User-Agent": USER_AGENT, "Accept": "*/*"}
-        ) as client:
-            resp = client.get(url, follow_redirects=True)
-            resp.raise_for_status()
-            return resp.content
-    except httpx.HTTPError as e:
-        raise SourceError("hazine", f"PDF download failed: {e}") from e
+        return await fetch_bytes(url, source="hazine")
+    except SourceError:
+        raise
 
 
 def _extract_pdf_text(content: bytes) -> str:
@@ -238,7 +231,7 @@ async def fetch_auctions(
             payload = cached
 
     if payload is None:
-        pdf_bytes = _download_pdf(url)
+        pdf_bytes = await _download_pdf(url)
         try:
             text = _extract_pdf_text(pdf_bytes)
         except Exception as e:

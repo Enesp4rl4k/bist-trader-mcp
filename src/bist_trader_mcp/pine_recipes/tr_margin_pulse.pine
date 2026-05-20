@@ -1,0 +1,63 @@
+//@version=6
+// =============================================================================
+// TR Margin Pulse — overlay marketwide VIOP margin call signal from Takasbank.
+// Plots the ratio Margin Call Total / Required Margin as a separate pane, with
+// alert thresholds for stress.
+//
+// Placeholders filled by the MCP at generation time:
+//   {{MARGIN_CALL_TL}}     — latest margin call total (TL)
+//   {{REQUIRED_MARGIN_TL}} — latest required margin total (TL)
+//   {{HISTORY_JSON}}       — JSON array of {date, mc_tl, req_tl} (last N days)
+//   {{STRESS_THRESHOLD}}   — ratio above which to alert (default 0.05)
+//   {{AS_OF_DATE}}         — YYYY-MM-DD snapshot
+// =============================================================================
+indicator("TR Margin Pulse ({{AS_OF_DATE}})", overlay = false)
+
+stressThreshold = {{STRESS_THRESHOLD}}
+
+// Latest snapshot — displayed as a table.
+mcLatest  = {{MARGIN_CALL_TL}}
+reqLatest = {{REQUIRED_MARGIN_TL}}
+ratioLatest = reqLatest > 0 ? mcLatest / reqLatest : na
+
+// --- Time series (parallel arrays) ------------------------------------------
+var int[]   histDates = array.new<int>(0)
+var float[] histMc    = array.new<float>(0)
+var float[] histReq   = array.new<float>(0)
+
+if barstate.isfirst
+    {{MARGIN_HISTORY_LOADER}}
+
+getRatioOnBar() =>
+    r = na
+    if array.size(histDates) > 0
+        for i = 0 to array.size(histDates) - 1
+            ts = array.get(histDates, i)
+            if ts >= time and ts <= time_close
+                mc = array.get(histMc, i)
+                rq = array.get(histReq, i)
+                r := rq > 0 ? mc / rq : na
+                break
+    r
+
+ratio = getRatioOnBar()
+plot(ratio, title = "Margin Call / Required",
+     color = ratio >= stressThreshold ? color.red : color.teal,
+     linewidth = 2)
+hline(stressThreshold, "Stress threshold", color = color.orange,
+      linestyle = hline.style_dashed)
+hline(0, "Zero", color = color.gray)
+
+// Snapshot table
+var table snap = table.new(position.top_right, 2, 3, frame_color = color.gray)
+if barstate.islast
+    table.cell(snap, 0, 0, "Margin Call (TL)", bgcolor = color.new(color.gray, 70))
+    table.cell(snap, 1, 0, str.tostring(mcLatest, "#,###"))
+    table.cell(snap, 0, 1, "Required (TL)", bgcolor = color.new(color.gray, 70))
+    table.cell(snap, 1, 1, str.tostring(reqLatest, "#,###"))
+    table.cell(snap, 0, 2, "Ratio", bgcolor = color.new(color.gray, 70))
+    table.cell(snap, 1, 2, str.tostring(ratioLatest, "#.####"))
+
+alertcondition(ratio >= stressThreshold,
+               title   = "VIOP marketwide stress",
+               message = "Margin call ratio crossed stress threshold")

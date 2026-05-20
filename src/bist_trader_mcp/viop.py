@@ -35,10 +35,8 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any
 
-import httpx
-
 from ._cache import cache_get, cache_set
-from .http_utils import USER_AGENT, SourceError
+from .http_utils import SourceError, fetch_text
 
 VIOP_PAGE_URL = "https://www.isyatirim.com.tr/tr-tr/analiz/Sayfalar/viop.aspx"
 DEFAULT_CACHE_TTL_SECONDS = 60 * 60   # snapshot data, 1 h is plenty
@@ -187,22 +185,11 @@ def _parse_html(html: str, trade_date: str) -> list[VIOPSettlement]:
     return out
 
 
-def _fetch_html() -> str:
+async def _fetch_html() -> str:
     try:
-        with httpx.Client(
-            timeout=30.0,
-            headers={
-                "User-Agent": USER_AGENT,
-                "Accept": "text/html,application/xhtml+xml",
-                "Accept-Language": "tr,en;q=0.7",
-            },
-            follow_redirects=True,
-        ) as client:
-            resp = client.get(VIOP_PAGE_URL)
-            resp.raise_for_status()
-            return resp.text
-    except httpx.HTTPError as e:
-        raise SourceError("viop", f"İş Yatırım fetch failed: {e}") from e
+        return await fetch_text(VIOP_PAGE_URL, source="viop")
+    except SourceError:
+        raise
 
 
 def _serialise(rows: list[VIOPSettlement]) -> list[dict[str, Any]]:
@@ -295,7 +282,7 @@ async def fetch_daily_settlement(
             payload = cached
 
     if payload is None:
-        html = _fetch_html()
+        html = await _fetch_html()
         rows = _parse_html(html, trade_date=iso_date)
         if not rows:
             raise SourceError("viop", "0 rows parsed from İş Yatırım page")
@@ -307,6 +294,42 @@ async def fetch_daily_settlement(
         uf = underlying_filter.upper().strip()
         rows = [r for r in rows if r.contract.underlying == uf]
     return rows
+
+
+async def fetch_option_chain(
+    underlying: str,
+    expiry_year: int | None = None,
+    expiry_month: int | None = None,
+    as_of: date | str | None = None,
+    use_cache: bool = True,
+    cache_ttl_seconds: int = DEFAULT_CACHE_TTL_SECONDS,
+) -> list[VIOPSettlement]:
+    """Options-only chain for one underlying, optionally pinned to one expiry.
+
+    Returns rows sorted by (expiry, strike, right). Callers wanting an
+    IV surface should pass the result through `analyze_option_chain` (in
+    `tools.py`) with the spot price and risk-free rate.
+    """
+    settlements = await fetch_daily_settlement(
+        trade_date=as_of,
+        underlying_filter=underlying,
+        use_cache=use_cache,
+        cache_ttl_seconds=cache_ttl_seconds,
+    )
+    opts = [s for s in settlements if s.contract.contract_type == "option"]
+    if expiry_year is not None:
+        opts = [s for s in opts if s.contract.expiry_year == expiry_year]
+    if expiry_month is not None:
+        opts = [s for s in opts if s.contract.expiry_month == expiry_month]
+    opts.sort(
+        key=lambda s: (
+            s.contract.expiry_year,
+            s.contract.expiry_month,
+            s.contract.option_strike or 0.0,
+            s.contract.option_right or "",
+        )
+    )
+    return opts
 
 
 async def fetch_term_structure(

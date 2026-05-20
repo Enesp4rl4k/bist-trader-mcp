@@ -33,11 +33,9 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any
 
-import httpx
-
 from ._cache import cache_get, cache_set
 from ._wip import wip_error
-from .http_utils import USER_AGENT, SourceError
+from .http_utils import SourceError, fetch_bytes
 
 MKK_STATS_PDF_BASE = "https://www.mkk.com.tr/sites/default/files"
 DEFAULT_CACHE_TTL_SECONDS = 24 * 3600
@@ -211,13 +209,8 @@ def _candidate_pdf_urls(as_of: date) -> list[str]:
     return candidates
 
 
-def _download_pdf(url: str) -> bytes:
-    with httpx.Client(
-        timeout=30.0, headers={"User-Agent": USER_AGENT, "Accept": "*/*"}
-    ) as client:
-        resp = client.get(url, follow_redirects=True)
-        resp.raise_for_status()
-        return resp.content
+async def _download_pdf(url: str) -> bytes:
+    return await fetch_bytes(url, source="mkk")
 
 
 def _extract_pdf_text(content: bytes) -> str:
@@ -249,8 +242,8 @@ async def fetch_market_stats(
     last_err: Exception | None = None
     for candidate in urls:
         try:
-            pdf_bytes = _download_pdf(candidate)
-        except httpx.HTTPError as e:
+            pdf_bytes = await _download_pdf(candidate)
+        except SourceError as e:
             last_err = e
             continue
         try:

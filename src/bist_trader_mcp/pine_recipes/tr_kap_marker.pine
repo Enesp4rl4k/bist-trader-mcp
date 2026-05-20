@@ -1,0 +1,56 @@
+//@version=6
+// =============================================================================
+// TR KAP Marker — overlay material KAP disclosures as labels on the chart.
+//
+// Place this Pine on any BIST stock chart and it will render a label at each
+// timestamp where KAP filed a "material" disclosure for the ticker (or any
+// ticker if a global event such as a board decision is on the list).
+//
+// Placeholders filled by the MCP at generation time:
+//   {{TICKER}}            — equity code, e.g. "GARAN"
+//   {{KAP_EVENTS_JSON}}   — JSON array of {date, title, category}
+//   {{AS_OF_DATE}}        — YYYY-MM-DD snapshot
+// =============================================================================
+indicator("TR KAP Marker — {{TICKER}} ({{AS_OF_DATE}})", overlay = true,
+          max_labels_count = 200)
+
+// Snapshot list of material events. Each event is a tuple of (timestamp, label).
+// The MCP renders this as an inline Pine array; Pine v6 has no JSON parser so we
+// use a simple parallel-array convention.
+var int[]    eventTimes    = array.new<int>(0)
+var string[] eventTitles   = array.new<string>(0)
+var string[] eventCategory = array.new<string>(0)
+
+if barstate.isfirst
+    // {{KAP_EVENTS_JSON}} expands to a sequence of array.push(...) calls when
+    // rendered by recipes.render_recipe — see the loader below for the format.
+    {{KAP_EVENTS_LOADER}}
+
+// --- Per-bar: did any event fall inside this bar's window? -------------------
+barOpenMs  = time
+barCloseMs = time_close
+
+if array.size(eventTimes) > 0
+    for i = 0 to array.size(eventTimes) - 1
+        evTs = array.get(eventTimes, i)
+        if evTs >= barOpenMs and evTs <= barCloseMs
+            title = array.get(eventTitles, i)
+            cat   = array.get(eventCategory, i)
+            label.new(
+                x          = bar_index,
+                y          = high,
+                text       = "📌 " + cat + "\n" + title,
+                style      = label.style_label_down,
+                color      = color.new(color.orange, 20),
+                textcolor  = color.white,
+                size       = size.small,
+                yloc       = yloc.abovebar
+            )
+
+// --- Alert: fires when a new event lands on the latest bar -------------------
+alertCondition = false
+if barstate.islast and array.size(eventTimes) > 0
+    lastEv = array.get(eventTimes, array.size(eventTimes) - 1)
+    alertCondition := lastEv >= barOpenMs and lastEv <= barCloseMs
+alertcondition(alertCondition, title = "KAP Material Event",
+               message = "{{TICKER}}: material disclosure on this bar")

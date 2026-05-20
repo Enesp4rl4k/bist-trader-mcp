@@ -1,0 +1,61 @@
+//@version=6
+// =============================================================================
+// TR IV Surface — VIOP option implied-vol surface snapshot table on chart.
+// Shows the ATM term structure, 25-delta skew (front month), and the front /
+// back vol slope. Static snapshot — refresh via the MCP to update.
+//
+// Placeholders filled by the MCP at generation time:
+//   {{UNDERLYING}}           — VIOP underlying, e.g. "XU030"
+//   {{SPOT}}                 — spot price at snapshot time
+//   {{ATM_TERM_JSON}}        — JSON array of {expiry, dte, atm_iv_pct}
+//   {{SKEW_25D_PUT_PCT}}     — 25-delta put IV %
+//   {{SKEW_25D_CALL_PCT}}    — 25-delta call IV %
+//   {{SKEW_VOL_PTS}}         — put_iv - call_iv (vol points)
+//   {{TERM_SLOPE_VOL_PTS}}   — front ATM - back ATM (vol points)
+//   {{AS_OF_DATE}}           — YYYY-MM-DD snapshot
+// =============================================================================
+indicator("TR IV Surface — {{UNDERLYING}} ({{AS_OF_DATE}})", overlay = true)
+
+spotPx        = {{SPOT}}
+put25Pct      = {{SKEW_25D_PUT_PCT}}
+call25Pct     = {{SKEW_25D_CALL_PCT}}
+skewVolPts    = {{SKEW_VOL_PTS}}
+termSlopePts  = {{TERM_SLOPE_VOL_PTS}}
+
+// --- ATM term structure rows ------------------------------------------------
+var string[] expiries = array.new<string>(0)
+var float[]  dtes     = array.new<float>(0)
+var float[]  atmIvs   = array.new<float>(0)
+
+if barstate.isfirst
+    {{ATM_TERM_LOADER}}
+
+// --- Snapshot table ---------------------------------------------------------
+var table iv = table.new(position.top_right, 3, 12, frame_color = color.gray,
+                          border_color = color.gray)
+
+if barstate.islast
+    table.cell(iv, 0, 0, "Expiry",  bgcolor = color.new(color.gray, 60),
+               text_color = color.white)
+    table.cell(iv, 1, 0, "DTE",     bgcolor = color.new(color.gray, 60),
+               text_color = color.white)
+    table.cell(iv, 2, 0, "ATM IV%", bgcolor = color.new(color.gray, 60),
+               text_color = color.white)
+
+    n = math.min(array.size(expiries), 10)
+    for i = 0 to n - 1
+        table.cell(iv, 0, i + 1, array.get(expiries, i))
+        table.cell(iv, 1, i + 1, str.tostring(array.get(dtes, i), "#"))
+        table.cell(iv, 2, i + 1, str.tostring(array.get(atmIvs, i), "#.##"))
+
+    rowSkew = n + 1
+    table.cell(iv, 0, rowSkew, "25Δ Skew", bgcolor = color.new(color.orange, 60),
+               text_color = color.white)
+    table.cell(iv, 1, rowSkew, str.tostring(skewVolPts, "+#.##;-#.##"))
+    table.cell(iv, 2, rowSkew, "vol pts")
+
+    rowTerm = rowSkew + 1
+    table.cell(iv, 0, rowTerm, "Term Slope", bgcolor = color.new(color.orange, 60),
+               text_color = color.white)
+    table.cell(iv, 1, rowTerm, str.tostring(termSlopePts, "+#.##;-#.##"))
+    table.cell(iv, 2, rowTerm, "front-back")

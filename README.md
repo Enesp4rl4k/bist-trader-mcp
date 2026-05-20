@@ -20,7 +20,13 @@ Türkiye finansal piyasaları için MCP (Model Context Protocol) sunucusu. Açı
 
 Tek cümle: **"TR finans verisini topla, Claude ile analiz et, sonucu TradingView'a Pine recipe olarak indir."**
 
-## Tool yüzeyi (v0.2 — 17 tool)
+## Tool yüzeyi (v0.8 — 60 tool + 8 prompt + 4 resource)
+
+> **v0.8**: **backtester** (signals → equity curve + trades), **performance metrics** (Sharpe/Sortino/Calmar/MaxDD/win rate/profit factor), **Markowitz portfolio optimizer** (efficient frontier + min-var + max-Sharpe), ve **Kelly criterion + ATR position sizing**. Trading mantığını uçtan uca: sinyal → backtest → optimize → boyutlandır.
+> **v0.7**: **volatility forecasting** (EWMA + GARCH(1,1)), **BIST sektör rotasyon** analizi, **on-chain** (Etherscan gas + BTC network), **Nelson-Siegel-Svensson yield curve fitter** (herhangi bir tenor'da yield interpolasyonu).
+> **v0.6**: **opsiyon strateji simülatörü** (straddle, strangle, iron condor, butterfly, vertical), **realized volatility** (CC + Parkinson + Garman-Klass + IV/RV ratio), ve **finansal news/RSS aggregator** (Investing, Yahoo, Reuters, CoinDesk).
+> **v0.5**: kripto opsiyon IV surface (Deribit), crypto F&G sentiment, ve **çok-varlık korelasyon analitiği** eklendi. Mevcut `find_viop_spread_opportunities` artık BTC/ETH option surface'ı için de çalışıyor (aynı şema).
+> **v0.4 itibariyle global trader MCP'sine evrildi**: TR-fokuslu rates/türev/macro çekirdeğine **kripto (CoinGecko + Binance perp funding/OI)**, **global spot FX (ECB referans rates)**, **global indices/treasuries/commodities snapshot**, ve **standart teknik göstergeler (RSI/MACD/Bollinger/ATR/EMA/SMA)** eklendi.
 
 **Durum etiketleri:**
 - ✅ **LIVE** — gerçek veriyle doğrulandı, prod-grade
@@ -52,9 +58,90 @@ Tek cümle: **"TR finans verisini topla, Claude ile analiz et, sonucu TradingVie
 ### Cross-asset
 - ✅ `calculate_basis_fair_value` — futures vs spot cost-of-carry deviation + implied repo
 
-### TradingView köprüsü
+### Türev analitiği (v0.3 yeni)
+- ✅ `get_viop_iv_surface` — VIOP opsiyon implied vol yüzeyi: per-strike IV/Δ/moneyness, ATM term structure, 25Δ skew, front/back vol slope
+- ✅ `find_viop_spread_opportunities` — calendar / vertical / butterfly spread tarayıcı (vol-point edge ile sıralı)
+- ✅ `calculate_portfolio_var` — parametric / historical VaR + Expected Shortfall, gamma adjustment
+- ✅ `stress_test_portfolio` — built-in senaryolar (rates+200bp, tl_devalue_20pct, xu030_-10pct, vol_spike, broad ±5%) + custom senaryo
+
+### Observability (v0.3 yeni)
+- ✅ `get_health_status` — cache freshness + Playwright + EVDS key durumu
+
+### Global piyasalar (v0.4 yeni)
+- ✅ `get_global_pulse` — tek çağrıda global özet: SPX/NDX/DAX/FTSE/N225/HSI + UST 3M/5Y/10Y/30Y + WTI/Brent/Gold/Silver/Copper/Natgas + BTC/ETH/SOL
+- ✅ `get_global_fx_spot` — ECB referans rates (EURUSD, USDJPY, GBPUSD, ...) — Frankfurter
+- ✅ `get_global_fx_history` — günlük FX geçmişi (1-N gün)
+- ✅ `get_global_fx_matrix` — G10 bases × EM quotes matrisi
+
+### Kripto (v0.4 yeni)
+- ✅ `get_crypto_spots` — CoinGecko spot snapshot (top N coin: fiyat, market cap, 24h vol, 24h/7d % change, ATH)
+- ✅ `get_crypto_klines` — Binance spot OHLCV (1m–1w, max 1000 bar)
+- ✅ `get_crypto_funding_rates` — Binance USD-M perp funding history + annualised avg (leverage stress sinyali)
+- ✅ `get_crypto_open_interest` — perp OI tarihçesi
+
+### Teknik göstergeler (v0.4 yeni)
+- ✅ `calculate_technicals` — herhangi bir OHLCV serisi için: SMA 20/50/200, EMA 12/26, RSI(14), MACD(12/26/9), Bollinger(20,2σ), ATR(14) + kategorik label'lar (trend, RSI, BB)
+
+### Kripto opsiyon & sentiment (v0.5 yeni)
+- ✅ `get_deribit_iv_surface` — BTC/ETH option IV surface (Deribit mark_iv), `get_viop_iv_surface` ile aynı şema; `find_viop_spread_opportunities` doğrudan üzerine çalışır
+- ✅ `get_crypto_fear_greed` — alternative.me composite F&G index + history (kontrarian sinyal)
+
+### Çok-varlık korelasyon (v0.5 yeni)
+- ✅ `calculate_correlation_matrix` — N×N pairwise korelasyon + top-10 |ρ| + bottom-10 (diversifying)
+- ✅ `calculate_rolling_correlation` — iki seri için rolling correlation (rejim değişimi tespiti, BTC-SPX flip vb.)
+
+### Opsiyon strateji simülatörü (v0.6 yeni)
+- ✅ `simulate_option_strategy` — straddle/strangle/iron condor/butterfly/vertical spread için tam P&L grid, max profit/loss, breakevens, net debit/credit. At-expiry veya mid-life (days_forward param).
+- ✅ `list_strategy_templates` — kullanılabilir şablonların listesi
+
+### Realized volatility (v0.6 yeni)
+- ✅ `calculate_realized_vol` — close-to-close + Parkinson (H/L) + Garman-Klass (O/H/L/C); `iv_atm_pct` ile birlikte IV/RV oranı + spread (opsiyon mean-reversion sinyali)
+
+### Finansal haberler (v0.6 yeni)
+- ✅ `get_news_headlines` — RSS aggregator: Investing.com (top/commodities/FX/economy/crypto), Yahoo Finance, Reuters business, CoinDesk. 15-dk cache.
+
+### Volatility forecasting (v0.7 yeni)
+- ✅ `calculate_ewma_volatility` — RiskMetrics EWMA (λ=0.94), vol path + next-period forecast
+- ✅ `calculate_garch_forecast` — GARCH(1,1) coarse-grid MLE + horizon path + stationary long-run vol
+
+### BIST sektör rotasyon (v0.7 yeni)
+- ✅ `get_bist_sector_rotation` — 17 sektör endeksi (XBANK, XUSIN, XGIDA, XKAGT, XHOLD, XKMYA, ...) için total return, recent return, XU100'e karşı relative strength + ranked top-3/bottom-3
+
+### On-chain (v0.7 yeni)
+- ✅ `get_eth_gas_oracle` — Etherscan: safe/propose/fast gas (Gwei) + suggested base fee (NFT/airdrop sinyali)
+- ✅ `get_btc_network_stats` — blockchain.info: hashrate, difficulty, supply, mempool
+
+### Yield curve fitting (v0.7 yeni)
+- ✅ `fit_yield_curve_nss` — Nelson-Siegel veya NSS fit; herhangi bir tenor için yield interpolasyonu (3.5Y'ı 2Y/5Y'dan türet, noisy DİBS auction yields'i pürüzsüzleştir)
+
+### Backtest + performance (v0.8 yeni)
+- ✅ `backtest_strategy` — event-driven backtest: closes + signals → equity curve + trades + full performance panel. Built-in sinyal üreticileri: sma_crossover, rsi_thresholds, bollinger_mean_reversion. Commission + slippage cost modeli.
+- ✅ `list_signal_generators` — kullanılabilir sinyal üreticileri
+- ✅ `calculate_performance_panel` — herhangi bir returns/equity curve/trade list için: Sharpe, Sortino, Calmar, max drawdown, win rate, profit factor, expectancy
+
+### Portfolio optimization (v0.8 yeni)
+- ✅ `optimize_portfolio_markowitz` — closed-form Markowitz: min-variance + max-Sharpe (tangency) + 25-noktalı efficient frontier; opsiyonel target-return portföyü
+
+### Position sizing (v0.8 yeni)
+- ✅ `calculate_kelly_sizing` — bet Kelly (win prob + W/L ratio) + continuous Kelly (μ/σ²) + fractional variants (%25/%50/%100)
+- ✅ `calculate_atr_position_size` — ATR-tabanlı stop loss ile %1 risk kuralı (trend-following standardı)
+
+### TradingView köprüsü (6 recipe)
 - ✅ `list_pine_recipes` — TR-aware Pine v6 template kataloğu
 - ✅ `render_pine_recipe` — placeholders'ı canlı veriyle doldur, Pine kodu döndür
+- `tr_macro_backdrop`, `tr_basis_monitor`, **`tr_kap_marker`** (v0.3), **`tr_foreign_flow`** (v0.3), **`tr_margin_pulse`** (v0.3), **`tr_iv_surface`** (v0.3)
+
+### MCP Resources (v0.3 yeni)
+- `bist-trader://catalog/evds-series` — EVDS seri katalogu (JSON)
+- `bist-trader://catalog/pine-recipes` — Pine template metadata (JSON)
+- `bist-trader://catalog/stress-scenarios` — built-in stres senaryo katalogu (JSON)
+- `bist-trader://snapshot/daily-report` — TR markets günlük özet (Markdown, on-read render)
+
+### MCP Prompts (v0.3 yeni)
+- `daily-tr-rates-report` — politika faizi + repo curve + ihale takvimi + ekonomik takvim'i tek prompt'a paketler
+- `viop-opportunity-scan` — bir underlying için term structure + IV surface + spread tarayıcı + Pine overlay
+- `kap-event-impact` — KAP material event'leri × EOD reaksiyon analizi
+- `portfolio-risk-overview` — Greeks + VaR + stres test tek bir akışta
 
 ### Test durumu
 ```
@@ -190,16 +277,29 @@ Detaylı quickstart + Claude Desktop config: [`docs/quickstart.md`](docs/quickst
 - ✅ Cross-asset basis fair value + implied repo
 - ✅ İkinci Pine recipe: `tr_basis_monitor`
 
-**v0.3 (sıradaki)**
+**v0.3 (mevcut)**
+- ✅ VIOP IV surface + skew + term structure
+- ✅ Spread tarayıcı (calendar, vertical, butterfly)
+- ✅ Portfolio VaR (parametric + historical) + Expected Shortfall
+- ✅ Stress test framework (9 built-in + custom senaryo)
+- ✅ 4 yeni Pine recipe (tr_kap_marker, tr_foreign_flow, tr_margin_pulse, tr_iv_surface)
+- ✅ MCP Resources (4 dataset) + Prompts (4 hazır akış)
+- ✅ Health/observability tool
 
-Öncelik: 5 WIP endpoint için **gerçek upstream pattern keşfi** (her biri browser network-tab inceleme + olası Playwright session reuse):
-- KAP — disclosure JSON endpoint (custom 666 + WAF arkasında)
-- VIOP — Borsa İstanbul günlük türev bülteni (URL pattern hâlâ aranıyor)
-- Takasbank — VIOP teminat parametre Excel/JSON
-- Hazine — DİBS ihale takvimi (muhtemelen PDF parse)
-- MKK — yabancı pay oranı (oturum/captcha bağımlı)
+**v0.4 (mevcut — global trader)**
+- ✅ Kripto: CoinGecko spot + Binance klines/funding/OI
+- ✅ Global FX (ECB referans) + N×M matris
+- ✅ Global piyasalar pulse (US/EU/Asia indices + treasuries + commodities + crypto majors)
+- ✅ Teknik göstergeler (RSI, MACD, Bollinger, ATR, EMA, SMA) — herhangi bir seri için
 
-Sonra:
+**v0.5 (sıradaki)**
+
+WIP endpoint'leri kapatma:
+- MKK per-ticker yabancı pay oranı (gated portal)
+- Takasbank VIOP SPAN margin parametreleri (Excel pipeline)
+- Yield curve rebuild (TP.ATBPK retired → per-ISIN bie_pydibs)
+
+Yeni kaynaklar:
 - TÜİK makro (TÜFE detay, sanayi üretimi, dış ticaret)
 - Açığa satış istatistikleri + block trade akışı
 - VIOP option chain ingest (toplu IV surface)

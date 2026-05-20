@@ -16,15 +16,23 @@ IMPORTANT — 2024-04-05 breaking change:
 
 Series codes are documented at:
     https://evds3.tcmb.gov.tr/tumSeriler
+
+v0.3 improvements:
+    - Uses the shared httpx.AsyncClient from http_utils (connection pooling,
+      TCP/TLS reuse) instead of creating a new client per request.
+    - Retry with exponential backoff is handled by the shared client layer.
 """
 
 from __future__ import annotations
 
+import asyncio
 import os
 from dataclasses import dataclass
 from datetime import date, datetime
 
 import httpx
+
+from .http_utils import get_shared_client
 
 # EVDS migrated host + path in 2025: the legacy `evds2.tcmb.gov.tr/service/evds`
 # now redirects to evds3 which serves only the SPA shell. The actual REST API
@@ -50,6 +58,9 @@ class EVDSClient:
     """Async HTTP client for TCMB EVDS.
 
     The API key may be passed explicitly or read from `TCMB_EVDS_API_KEY`.
+
+    v0.3: uses the shared httpx.AsyncClient from http_utils for connection
+    pooling. No longer creates a new client per request.
     """
 
     def __init__(
@@ -110,30 +121,48 @@ class EVDSClient:
         if formulas is not None:
             path_parts.append(f"formulas={formulas}")
 
-        url = f"{self.base_url}/series={'&'.join(path_parts[1:])}".replace(
-            "series=", "series=" + path_parts[0].split("=", 1)[1], 1
-        )
-        # Build it more simply / safely:
         url = f"{self.base_url}/" + "&".join(path_parts)
 
         headers = {"key": self.api_key, "Accept": "application/json"}
 
-        async with httpx.AsyncClient(timeout=self.timeout, headers=headers) as client:
-            resp = await client.get(url)
-            if resp.status_code == 401 or resp.status_code == 403:
-                raise EVDSError(
-                    f"EVDS auth rejected (HTTP {resp.status_code}). "
-                    "Verify TCMB_EVDS_API_KEY is the new-style key from "
-                    "evds3.tcmb.gov.tr and that it has not been revoked."
-                )
-            if resp.status_code >= 400:
-                raise EVDSError(
-                    f"EVDS HTTP {resp.status_code}: {resp.text[:300]}"
-                )
+        # Use the shared client for connection reuse across EVDS calls.
+        # We add retry with exponential backoff for transient failures.
+        client = get_shared_client()
+        last_err: Exception | None = None
+        max_retries = 3
+
+        for attempt in range(max_retries + 1):
             try:
-                payload = resp.json()
-            except ValueError as e:
-                raise EVDSError(f"EVDS returned non-JSON response: {e}") from e
+                resp = await client.get(url, headers=headers)
+                if resp.status_code in (401, 403):
+                    raise EVDSError(
+                        f"EVDS auth rejected (HTTP {resp.status_code}). "
+                        "Verify TCMB_EVDS_API_KEY is the new-style key from "
+                        "evds3.tcmb.gov.tr and that it has not been revoked."
+                    )
+                if resp.status_code in (429, 500, 502, 503, 504) and attempt < max_retries:
+                    last_err = EVDSError(f"EVDS HTTP {resp.status_code} (transient)")
+                    await asyncio.sleep(min(10.0, 1.0 * (2 ** attempt)))
+                    continue
+                if resp.status_code >= 400:
+                    raise EVDSError(
+                        f"EVDS HTTP {resp.status_code}: {resp.text[:300]}"
+                    )
+                try:
+                    payload = resp.json()
+                except ValueError as e:
+                    raise EVDSError(f"EVDS returned non-JSON response: {e}") from e
+                break
+            except (httpx.TransportError, httpx.HTTPStatusError) as e:
+                last_err = e
+                if attempt >= max_retries:
+                    raise EVDSError(
+                        f"EVDS request failed after {max_retries + 1} attempts: {last_err}"
+                    ) from e
+                await asyncio.sleep(min(10.0, 1.0 * (2 ** attempt)))
+                continue
+        else:
+            raise EVDSError(f"EVDS request failed after {max_retries + 1} attempts: {last_err}")
 
         items = payload.get("items")
         if not isinstance(items, list):
