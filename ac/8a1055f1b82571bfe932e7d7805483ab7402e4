@@ -1,0 +1,212 @@
+src/bist_trader_mcp/server.py
+  s_dd63a23229ec0b::t_2d4273baaee0e0 1505-1567,1569-1570,1572-1575,1577,1579-1604
+  s_dbfad198a96031::t_b363d0b143105d 132-143,145-148,150-152
+  s_dd63a23229ec0b::t_217ca46abed2ff 1734-1860,1867,1870-1878,1894-1896,1908-1912,1914-1915,1926-1928,1931-1932,1935-1936,2036-2041,2047-2067,2069-2089
+  s_dd63a23229ec0b::t_80b6ff26ebf74a 75,77
+  s_dd63a23229ec0b::t_4477e1248f56d8 36,43-46,49-52
+  s_dd63a23229ec0b::t_a5a9c5b6d9b6c6 30,35,41,47
+  s_dd63a23229ec0b::t_b1f4f60c6e9942 48
+  s_dd63a23229ec0b::t_86cfb762cd1721 1102-1217
+  s_dd63a23229ec0b::t_bed9b01c4fb14e 79
+  s_dd63a23229ec0b::t_e431534ef6c2fc 1861-1866,1868-1869,1879-1893,1897-1907,1913,1916-1925,1929-1930,1933-1934,2042-2046
+  s_dd63a23229ec0b::t_90c7efcd232a31 76
+  s_dd63a23229ec0b::t_91d70c9b64f034 794-842,844-850,852-857,859-887,890-897,899,901-920,923-927,929-931,1632-1644
+  s_dbfad198a96031::t_c7178ed5048fe3 69
+  s_dbfad198a96031::t_a3f6183c3582e0 56
+  s_dd63a23229ec0b::t_070c034273a094 1241-1244
+  s_dbfad198a96031::t_1ae0a39e567ac3 58
+  s_dbfad198a96031::t_b311d26e804776 602-645,648-650,652,654
+  s_dd63a23229ec0b::t_f351fe21bc8658 33,37,59,66,80
+  s_dd63a23229ec0b::t_6f664028473a19 932-949,952-963,965-974,976-1101,1605-1631
+  s_dd63a23229ec0b::t_8c67dae1dc6551 1937-1950,1954-1985
+  s_dbfad198a96031::t_cfab4f67bd987c 21
+  s_dbfad198a96031::t_12be6a73879f22 346-371,373-390
+  s_dd63a23229ec0b::t_2a8da2138f822d 1218-1240,1246-1251,1253-1263,1265,1267-1377
+  s_dd63a23229ec0b::t_39018b9e977516 1951-1953
+  s_dd63a23229ec0b::t_02bbe037140ee0 31-32,38-40,42
+  s_dd63a23229ec0b::t_f630e0b0ceb7d7 22-23,26-27
+  s_dbfad198a96031::t_73cbd96f1e7bfb 63
+  s_dd63a23229ec0b::t_66bb8166fe9314 1378-1504
+  s_dd63a23229ec0b::t_9b1f3f0897e887 1986-2035
+  s_dbfad198a96031::t_c529e3a51bcd0b 716-752,754-758
+  s_dd63a23229ec0b::t_718e05fb8b05ac 34
+  s_dbfad198a96031::t_e7d806614f7a58 683-704,707-711,713-715
+src/bist_trader_mcp/fear_greed.py
+  s_dd63a23229ec0b::t_aa1a1f51c0ee7a 1-73
+src/bist_trader_mcp/strategies.py
+  s_dd63a23229ec0b::t_5746e1770d0d86 1-338
+src/bist_trader_mcp/yield_fitter.py
+  s_dd63a23229ec0b::t_33b8d57ca9c4d6 1-195
+docs/COMPOSITION_SETUP.md
+  s_e27b8ec4791d53::t_e7292b9c85b4ae 1-125
+src/bist_trader_mcp/iv_surface.py
+  s_dd63a23229ec0b::t_24c664272ad0a7 1-432
+tests/test_vol_forecast.py
+  s_dd63a23229ec0b::t_b6fc989a8cdfbd 1-89
+tests/test_portfolio.py
+  s_dbfad198a96031::t_497928a79ddb69 1-185
+tests/test_technicals.py
+  s_dd63a23229ec0b::t_e339e43b24da19 1-105
+tests/test_correlation.py
+  s_dd63a23229ec0b::t_a96aea416ce4ba 1-72,88,92-124
+  s_dd63a23229ec0b::t_7b70899fb5ec1f 73-87,89-91
+src/bist_trader_mcp/portfolio.py
+  s_dd63a23229ec0b::t_09adb7bd4da510 334-432,434-601
+  s_dbfad198a96031::t_104c761cffb261 1-33,35-333
+  s_dd63a23229ec0b::t_cec4878b92c867 433
+  s_dd63a23229ec0b::t_c97e5ed445e34e 34
+src/bist_trader_mcp/fx.py
+  s_dbfad198a96031::t_e266af1d9fb4e3 1-95
+src/bist_trader_mcp/bist_sectors.py
+  s_dd63a23229ec0b::t_a554b9be954cfe 1-153
+tests/test_portfolio_opt_kelly.py
+  s_dd63a23229ec0b::t_512eb2079c5529 28-34,39-41
+  s_dd63a23229ec0b::t_cae820a0caf101 1-27,35-38,42-107
+src/bist_trader_mcp/pine_recipes/tr_kap_marker.pine
+  s_dd63a23229ec0b::t_624b9bdc86b94d 1-56
+src/bist_trader_mcp/correlation.py
+  s_dd63a23229ec0b::t_dc5f76c3cb5b12 1-141
+tests/test_realized_vol.py
+  s_dd63a23229ec0b::t_b8f1d7825cfdef 1-90
+src/bist_trader_mcp/viop.py
+  s_dbfad198a96031::t_240af09125658d 299-334
+src/bist_trader_mcp/pine_recipes/tr_foreign_flow.pine
+  s_dd63a23229ec0b::t_60c8a6d7b3953f 1-48
+src/bist_trader_mcp/recipes.py
+  s_dd63a23229ec0b::t_02b18dec2d15d2 66-129
+src/bist_trader_mcp/deribit.py
+  s_dd63a23229ec0b::t_1e928133a06d8e 1-309
+tests/test_option_chain.py
+  s_dbfad198a96031::t_87660ddc80a9bb 1-116
+src/bist_trader_mcp/news.py
+  s_dd63a23229ec0b::t_074786d5362bf2 1-154
+src/bist_trader_mcp/kelly.py
+  s_dd63a23229ec0b::t_afeb2e16f4dc95 1-164
+tests/test_fx_forward.py
+  s_dbfad198a96031::t_ab9bac77482327 1-37,39,42-99
+  s_dbfad198a96031::t_f7830d334467de 38,40-41
+tests/test_repo_curve.py
+  s_dbfad198a96031::t_1ad74af547b898 1-62
+tests/test_calendar.py
+  s_dbfad198a96031::t_7cd81b48d091b7 1-57
+tests/test_deribit.py
+  s_dd63a23229ec0b::t_8b17b6d4dcf1dd 1-107
+tests/test_strategies.py
+  s_dd63a23229ec0b::t_71321bd099a39b 1-105
+src/bist_trader_mcp/performance.py
+  s_dd63a23229ec0b::t_8815b2c23da1a9 1-194
+src/bist_trader_mcp/global_fx.py
+  s_dd63a23229ec0b::t_6f376fbc69025e 1-157
+README.md
+  s_dd63a23229ec0b::t_83f96d2ca862e4 85-92
+  s_dd63a23229ec0b::t_643091a3926011 117-128
+  s_dd63a23229ec0b::t_774616ad0f8cac 103-116
+  s_dd63a23229ec0b::t_b91a2519286e40 289-295
+  s_dd63a23229ec0b::t_f330665ad391ec 24,29
+  s_dd63a23229ec0b::t_e729ee8a036a9c 26
+  s_dd63a23229ec0b::t_883381595f4204 280-287,297-302
+  s_dd63a23229ec0b::t_37cc4fa725f634 23,25
+  s_dd63a23229ec0b::t_f74de9fdf08d18 93-102
+  s_dd63a23229ec0b::t_facdd65c1d8ffc 28
+  s_dd63a23229ec0b::t_507923d1fe35d9 70-84
+  s_dd63a23229ec0b::t_4b657241fa40da 61-69,129,132-144
+  s_dd63a23229ec0b::t_28b186d66b5b7b 27
+tests/test_performance.py
+  s_dd63a23229ec0b::t_c821bbab3d6e41 1-96
+src/bist_trader_mcp/technicals.py
+  s_dd63a23229ec0b::t_26b478561c41a2 1-297
+tests/test_backtest.py
+  s_dd63a23229ec0b::t_3c8c867ff3d0d7 1-81
+src/bist_trader_mcp/vol_forecast.py
+  s_dd63a23229ec0b::t_b91665182c3d87 1-194
+src/bist_trader_mcp/global_markets.py
+  s_dd63a23229ec0b::t_e5febbca470593 1-139
+tests/test_yield_fitter.py
+  s_dd63a23229ec0b::t_86fc02b14e1549 1-64
+src/bist_trader_mcp/pine_recipes/tr_iv_surface.pine
+  s_dd63a23229ec0b::t_1fb3fa92fe35b7 1-61
+src/bist_trader_mcp/onchain.py
+  s_dd63a23229ec0b::t_8359d1bca496ee 1-165
+src/bist_trader_mcp/backtest.py
+  s_dd63a23229ec0b::t_dcecefffc11451 1-267
+tests/test_var_stress.py
+  s_dd63a23229ec0b::t_994eb8d31c10af 1-59,62,64-102
+  s_dd63a23229ec0b::t_f65b36b2e6a17c 60-61,63
+tests/test_iv_surface.py
+  s_dd63a23229ec0b::t_0d5cc4017a30ea 74-78
+  s_dd63a23229ec0b::t_7ddd64bf989900 1-19,27-73,79-154
+  s_dd63a23229ec0b::t_104238f8c4ba8a 20-26
+src/bist_trader_mcp/tools.py
+  s_dd63a23229ec0b::t_dbae4ff423b31f 2369-2425,2428-2547
+  s_dd63a23229ec0b::t_d6a29753f8a28f 2293-2294
+  s_dd63a23229ec0b::t_71845c09b2f062 1665-1887
+  s_dd63a23229ec0b::t_dce9daa292d754 44,48-49
+  s_dd63a23229ec0b::t_e4977c8f34188c 18-22
+  s_dbfad198a96031::t_7eb778bcb82439 58
+  s_dd63a23229ec0b::t_420c036785ce87 46-47
+  s_dbfad198a96031::t_4ed9c48b3401e5 66,68
+  s_dd63a23229ec0b::t_298c862704ade3 45
+  s_dd63a23229ec0b::t_f9b1ec89d6c825 2426-2427
+  s_dd63a23229ec0b::t_0a3f22ec0d5168 1888-2105
+  s_dd63a23229ec0b::t_4cc2f0f06009f1 43
+  s_dbfad198a96031::t_7204f56858c1d5 531-662,665-706
+  s_dd63a23229ec0b::t_11977042fe352b 59-60
+  s_dd63a23229ec0b::t_e33220a97b4f57 2106-2200,2740-2767
+  s_dd63a23229ec0b::t_d7c4421acfe2be 51-54
+  s_dd63a23229ec0b::t_b6d1a16cc7c316 15
+  s_dd63a23229ec0b::t_cec4878b92c867 42
+  s_dd63a23229ec0b::t_29a852aae30b97 2201-2292,2295-2367
+  s_dbfad198a96031::t_95a3cba60efbab 25
+  s_dbfad198a96031::t_5931f26322bb78 161-259
+  s_dbfad198a96031::t_9b81f1033fb5ca 663-664
+  s_dd63a23229ec0b::t_427b4c09a84480 30-35,38-39
+  s_dd63a23229ec0b::t_1dcc6e16323cef 50
+  s_dbfad198a96031::t_a686d7f89fa489 76
+  s_dd63a23229ec0b::t_b438fd9ed3a36f 2368,2548-2739
+  s_dd63a23229ec0b::t_2c036e038cbccb 26-29
+  s_dd63a23229ec0b::t_e79263378fd6b9 62
+  s_dbfad198a96031::t_9a7d2572feb464 1231-1259
+  s_dbfad198a96031::t_558e5920a622d1 1377-1489
+  s_dbfad198a96031::t_88d9099106dd9c 1323-1376
+  s_dbfad198a96031::t_18d5aab3852aab 37
+src/bist_trader_mcp/calendar_data.py
+  s_dbfad198a96031::t_a9305f67b5a902 1-152
+src/bist_trader_mcp/pine_recipes/tr_margin_pulse.pine
+  s_dd63a23229ec0b::t_be3055dd6ed024 1-63
+src/bist_trader_mcp/portfolio_opt.py
+  s_dd63a23229ec0b::t_07b2808f41d601 1-201
+src/bist_trader_mcp/crypto.py
+  s_dd63a23229ec0b::t_4ed52585dd0f09 1-315
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.11",
+  "base_commit_sha": "ac8a1055f1b82571bfe932e7d7805483ab7402e4",
+  "prompts": {},
+  "sessions": {
+    "s_dbfad198a96031": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "09fec5ff-14c6-419f-b006-b8400044d28f",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Enes Parlak <eparlak996@gmail.com>"
+    },
+    "s_dd63a23229ec0b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9adb3ebc-4d31-4c6b-805d-feb0b593c453",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Enes Parlak <eparlak996@gmail.com>"
+    },
+    "s_e27b8ec4791d53": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b04f6f92-91ee-443e-aba8-cd0b15e08ac8",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Enes Parlak <eparlak996@gmail.com>"
+    }
+  }
+}
