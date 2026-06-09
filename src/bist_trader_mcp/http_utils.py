@@ -47,6 +47,14 @@ class SourceError(RuntimeError):
 _default_headers = {"User-Agent": USER_AGENT, "Accept": "*/*"}
 
 _shared_client: httpx.AsyncClient | None = None
+_shared_client_loop: object | None = None
+
+
+def _current_loop() -> object | None:
+    try:
+        return asyncio.get_running_loop()
+    except RuntimeError:
+        return None
 
 
 def get_shared_client(
@@ -60,14 +68,22 @@ def get_shared_client(
     avoiding the per-request DNS lookup + TLS handshake overhead that the
     old `async with httpx.AsyncClient(...) as c:` pattern imposed.
 
-    Thread-safety: MCP servers are single-threaded async event loops, so a
-    module-global is safe. The client is lazily created on first use.
+    Loop-safety: an httpx.AsyncClient is bound to the event loop it was created
+    on. When the running loop changes (e.g. a fresh ``asyncio.run`` per MCP
+    tool call, or a worker-thread loop), the cached client is rebuilt so we
+    never hit "Event loop is closed".
     """
-    global _shared_client
-    if _shared_client is None or _shared_client.is_closed:
+    global _shared_client, _shared_client_loop
+    loop = _current_loop()
+    if (
+        _shared_client is None
+        or _shared_client.is_closed
+        or _shared_client_loop is not loop
+    ):
         merged = dict(_default_headers)
         if extra_headers:
             merged.update(extra_headers)
+        _shared_client_loop = loop
         _shared_client = httpx.AsyncClient(
             timeout=timeout,
             headers=merged,

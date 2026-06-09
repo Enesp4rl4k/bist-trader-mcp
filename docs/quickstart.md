@@ -43,7 +43,7 @@ Expected output:
 pytest -q
 ```
 
-12 tests, all offline (network-free): bond math (5) + options math (7).
+270+ offline tests (bond/options math, PA, fusion, market assistant mocks). CI runs on push via GitHub Actions.
 
 ## 5. Claude Desktop wiring
 

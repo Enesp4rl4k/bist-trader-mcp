@@ -127,6 +127,27 @@ RECIPES: dict[str, RecipeMeta] = {
             "AS_OF_DATE",
         ),
     ),
+    "pa_trade_overlay": RecipeMeta(
+        name="pa_trade_overlay",
+        filename="pa_trade_overlay.pine",
+        description=(
+            "Universal price-action trade overlay: horizontal entry, stop, "
+            "and take-profit lines with risk table. Combine with "
+            "design_trade_setup or design_from_price_action output."
+        ),
+        required_placeholders=(
+            "SYMBOL",
+            "DIRECTION",
+            "ENTRY",
+            "STOP",
+            "TP1",
+            "TP2",
+            "RISK_PCT",
+            "UNITS",
+            "RISK_REWARD",
+            "AS_OF_DATE",
+        ),
+    ),
 }
 
 

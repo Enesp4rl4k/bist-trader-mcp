@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "bist-trader": {
+      "command": "C:\\Users\\parlak\\Downloads\\tr-fixedincome-mcp\\.venv\\Scripts\\python.exe",
+      "args": ["-m", "bist_trader_mcp"],
+      "env": {
+        "TRADINGVIEW_MCP_PATH": "C:\\Users\\parlak\\Downloads\\tradingview-mcp"
+      }
+    }
+  }
+}

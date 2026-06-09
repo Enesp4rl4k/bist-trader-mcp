@@ -1,0 +1,35 @@
+---
+description: BIST Trader MCP — temel+teknik trade assistant akışı
+globs:
+  - "**/*"
+---
+
+# Trade assistant (bist-trader-mcp)
+
+## Tek giriş
+
+Öncelik: **`run_market_assistant`** (TradingView CDP 9222 açık).
+
+- `fetch_fundamentals=true` → KAP, snapshot, funding, sektör, makro
+- Çıktı: `chat_report.report_tr`, `fusion`, `market_context`
+- İşlem: yalnızca `fusion.trade_allowed === true` iken pozisyon çizilir
+
+## Chat kuralları
+
+- Türkçe özet; JSON sayılarını uydurma
+- Sıra: özet → teknik → temel → fusion → işlem → grafik
+- Yatırım tavsiyesi değildir
+
+## TV kapalıysa
+
+`analyze_market_context` + eldeki OHLCV veya `get_bist_eod_ohlcv`
+
+## MCP prompt
+
+`trade-assistant` veya `price-action-trade-design`
+
+## Dokümantasyon (kaynak doğruluk)
+
+- `docs/ANALYSIS_PIPELINE.md` — kapı sırası ve fusion
+- `docs/PERFORMANCE_AND_CONSISTENCY.md` — hız, tek TA hesabı
+- `chat_report.sections` + `trade_allowed` — kullanıcı özetinde bunları kullan

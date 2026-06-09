@@ -1,0 +1,79 @@
+//@version=6
+// =============================================================================
+// PA Trade Overlay — entry / stop / take-profit levels from MCP trade plan.
+//
+// Placeholders filled by render_pine_recipe:
+//   BINANCE:BTCUSDT           — e.g. "XAUUSD" (display only)
+//   long        — "long" or "short"
+//   67225.38            — entry price
+//   66618.02039871             — stop loss price
+//   74101.166              — first target (0 if unused)
+//   73706.215              — second target (0 if unused)
+//   1.0         — risk per trade % of equity
+//   0.2975            — position size (display)
+//   11.32      — best R:R (display)
+//   2026-06-03       — YYYY-MM-DD snapshot
+// =============================================================================
+indicator("PA Trade — BINANCE:BTCUSDT long (2026-06-03)", overlay = true,
+          max_lines_count = 10, max_labels_count = 10)
+
+entryPx  = 67225.38
+stopPx   = 66618.02039871
+tp1Px    = 74101.166
+tp2Px    = 73706.215
+riskPct  = 1.0
+units    = 0.2975
+bestRR   = 11.32
+isLong   = "long" == "long"
+
+var line entryLine = na
+var line stopLine  = na
+var line tp1Line   = na
+var line tp2Line   = na
+
+if barstate.isfirst
+    entryLine := line.new(bar_index, entryPx, bar_index + 1, entryPx,
+         xloc = xloc.bar_index, extend = extend.right,
+         color = color.new(color.blue, 0), width = 2, style = line.style_solid)
+    stopLine := line.new(bar_index, stopPx, bar_index + 1, stopPx,
+         xloc = xloc.bar_index, extend = extend.right,
+         color = color.new(color.red, 0), width = 2, style = line.style_dashed)
+    if tp1Px > 0
+        tp1Line := line.new(bar_index, tp1Px, bar_index + 1, tp1Px,
+             xloc = xloc.bar_index, extend = extend.right,
+             color = color.new(color.green, 0), width = 2, style = line.style_dotted)
+    if tp2Px > 0
+        tp2Line := line.new(bar_index, tp2Px, bar_index + 1, tp2Px,
+             xloc = xloc.bar_index, extend = extend.right,
+             color = color.new(color.teal, 0), width = 1, style = line.style_dotted)
+
+    label.new(bar_index, entryPx, "ENTRY " + str.tostring(entryPx, format.mintick),
+         style = isLong ? label.style_label_up : label.style_label_down,
+         color = color.new(color.blue, 20), textcolor = color.white, size = size.small)
+    label.new(bar_index, stopPx, "STOP " + str.tostring(stopPx, format.mintick),
+         style = isLong ? label.style_label_down : label.style_label_up,
+         color = color.new(color.red, 20), textcolor = color.white, size = size.small)
+    if tp1Px > 0
+        label.new(bar_index, tp1Px, "TP1 " + str.tostring(tp1Px, format.mintick),
+             style = label.style_label_left, color = color.new(color.green, 30),
+             textcolor = color.white, size = size.small)
+    if tp2Px > 0
+        label.new(bar_index, tp2Px, "TP2 " + str.tostring(tp2Px, format.mintick),
+             style = label.style_label_left, color = color.new(color.teal, 30),
+             textcolor = color.white, size = size.small)
+
+var table info = table.new(position.top_right, 2, 5, bgcolor = color.new(color.black, 80))
+if barstate.islast
+    table.cell(info, 0, 0, "Risk", text_color = color.gray, text_size = size.small)
+    table.cell(info, 1, 0, str.tostring(riskPct) + "%", text_color = color.white, text_size = size.small)
+    table.cell(info, 0, 1, "Units", text_color = color.gray, text_size = size.small)
+    table.cell(info, 1, 1, str.tostring(units, "#.####"), text_color = color.white, text_size = size.small)
+    table.cell(info, 0, 2, "Best R:R", text_color = color.gray, text_size = size.small)
+    table.cell(info, 1, 2, str.tostring(bestRR, "#.##"), text_color = color.white, text_size = size.small)
+    table.cell(info, 0, 3, "Bias", text_color = color.gray, text_size = size.small)
+    table.cell(info, 1, 3, "long", text_color = isLong ? color.lime : color.orange, text_size = size.small)
+    table.cell(info, 0, 4, "As of", text_color = color.gray, text_size = size.small)
+    table.cell(info, 1, 4, "2026-06-03", text_color = color.white, text_size = size.small)
+
+alertcondition(ta.cross(close, entryPx), title = "PA Entry touch", message = "Price touched entry level")
+alertcondition(ta.cross(close, stopPx), title = "PA Stop touch", message = "Price touched stop level")

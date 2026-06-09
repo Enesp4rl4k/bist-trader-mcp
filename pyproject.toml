@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "bist-trader-mcp"
-version = "0.3.0"
+version = "0.4.0"
 description = "BIST Trader MCP — TR finance MCP server: TCMB EVDS, BIST EOD, KAP, VIOP, options math, Pine v6 recipes. Companion to tradesdontlie/tradingview-mcp."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -88,7 +88,14 @@ select = ["E", "F", "I", "B", "UP", "N"]
 # with 12 monthly columns) are intentionally wider than the project's
 # normal line-length budget.
 [tool.ruff.lint.per-file-ignores]
-"tests/test_parsers.py" = ["E501"]
+"tests/*" = ["E501", "E741", "B007", "F841", "B905"]
+"src/bist_trader_mcp/yield_fitter.py" = ["N803", "N806"]
+"src/bist_trader_mcp/trade_journal.py" = ["E501"]
+"src/bist_trader_mcp/trade_playbook.py" = ["E501"]
+"src/bist_trader_mcp/tv_bridge.py" = ["E501"]
+"src/bist_trader_mcp/portfolio_opt.py" = ["N803", "N806"]
+"src/bist_trader_mcp/realized_vol.py" = ["E702"]
+"src/bist_trader_mcp/server.py" = ["E501"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

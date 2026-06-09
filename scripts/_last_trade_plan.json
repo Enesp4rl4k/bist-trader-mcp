@@ -1,0 +1,308 @@
+{
+  "source": "bist-trader-mcp \u2014 position_design.design_trade_setup",
+  "symbol": "BINANCE:BTCUSDT",
+  "direction": "long",
+  "entry": 67528.79,
+  "stop": 66963.06182728,
+  "targets": [
+    {
+      "label": "TP1",
+      "price": 74101.166,
+      "risk_reward": 11.62
+    },
+    {
+      "label": "TP2",
+      "price": 73706.215,
+      "risk_reward": 10.92
+    }
+  ],
+  "best_risk_reward": 11.62,
+  "min_risk_reward_required": 2.0,
+  "approved": true,
+  "reject_reasons": [],
+  "sizing": {
+    "equity": 100000.0,
+    "entry_price": 67528.79,
+    "stop_price": 66963.06182728,
+    "stop_distance": 565.7281727199879,
+    "direction": "long",
+    "risk_amount": 1000.0,
+    "risk_per_trade_pct": 1.0,
+    "units": 1.7676333762769114,
+    "notional": 119366.14306359451,
+    "notional_pct_of_equity": 119.36614306359452,
+    "leverage": 1.1936614306359452
+  },
+  "price_action_context": {
+    "bars_analyzed": 150,
+    "current_price": 67528.79,
+    "atr_14": 565.7281727225268,
+    "market_structure": "transition",
+    "structure_detail": {
+      "structure": "transition",
+      "swing_labels": [
+        "HH",
+        "HH",
+        "LH",
+        "HL",
+        "LL",
+        "LL"
+      ],
+      "last_swing_high": 74198,
+      "last_swing_low": 70686.68,
+      "recent_highs": [
+        73796.43,
+        74143.76,
+        74275.66,
+        74198
+      ],
+      "recent_lows": [
+        73216,
+        73781.3,
+        73400,
+        70686.68
+      ]
+    },
+    "bias": "neutral",
+    "swing_highs": [
+      {
+        "index": 17,
+        "price": 73616
+      },
+      {
+        "index": 29,
+        "price": 73949.22
+      },
+      {
+        "index": 37,
+        "price": 73939.19
+      },
+      {
+        "index": 48,
+        "price": 74514.1
+      },
+      {
+        "index": 58,
+        "price": 73796.43
+      },
+      {
+        "index": 73,
+        "price": 74143.76
+      },
+      {
+        "index": 80,
+        "price": 74275.66
+      },
+      {
+        "index": 102,
+        "price": 74198
+      }
+    ],
+    "swing_lows": [
+      {
+        "index": 11,
+        "price": 72728.85
+      },
+      {
+        "index": 21,
+        "price": 72582.82
+      },
+      {
+        "index": 33,
+        "price": 73189.11
+      },
+      {
+        "index": 45,
+        "price": 72512.49
+      },
+      {
+        "index": 59,
+        "price": 73216
+      },
+      {
+        "index": 78,
+        "price": 73781.3
+      },
+      {
+        "index": 95,
+        "price": 73400
+      },
+      {
+        "index": 119,
+        "price": 70686.68
+      }
+    ],
+    "resistance_levels": [
+      {
+        "price": 74101.166,
+        "touches": 5
+      },
+      {
+        "price": 73706.215,
+        "touches": 2
+      },
+      {
+        "price": 74514.1,
+        "touches": 1
+      }
+    ],
+    "support_levels": [],
+    "suggested_long_setup": {
+      "direction": "long",
+      "entry": 67528.79,
+      "stop": 66963.06182728,
+      "targets": [
+        74101.166,
+        73706.215
+      ],
+      "rationale": "Long bias (transition structure): stop below swing low 70686.6800, targets at resistance cluster(s)."
+    },
+    "suggested_short_setup": {
+      "direction": "short",
+      "entry": 67528.79,
+      "stop": 74342.91402159,
+      "targets": [
+        53900.54195682,
+        47086.41793523
+      ],
+      "rationale": "Short bias (transition structure): stop above swing high 74198.0000, targets at support cluster(s)."
+    }
+  },
+  "disclaimer": "Research / planning output only \u2014 not investment advice. Verify levels on your chart before trading.",
+  "auto_setup_rationale": "Long bias (transition structure): stop below swing low 70686.6800, targets at resistance cluster(s).",
+  "price_action": {
+    "bars_analyzed": 150,
+    "current_price": 67528.79,
+    "atr_14": 565.7281727225268,
+    "market_structure": "transition",
+    "structure_detail": {
+      "structure": "transition",
+      "swing_labels": [
+        "HH",
+        "HH",
+        "LH",
+        "HL",
+        "LL",
+        "LL"
+      ],
+      "last_swing_high": 74198,
+      "last_swing_low": 70686.68,
+      "recent_highs": [
+        73796.43,
+        74143.76,
+        74275.66,
+        74198
+      ],
+      "recent_lows": [
+        73216,
+        73781.3,
+        73400,
+        70686.68
+      ]
+    },
+    "bias": "neutral",
+    "swing_highs": [
+      {
+        "index": 17,
+        "price": 73616
+      },
+      {
+        "index": 29,
+        "price": 73949.22
+      },
+      {
+        "index": 37,
+        "price": 73939.19
+      },
+      {
+        "index": 48,
+        "price": 74514.1
+      },
+      {
+        "index": 58,
+        "price": 73796.43
+      },
+      {
+        "index": 73,
+        "price": 74143.76
+      },
+      {
+        "index": 80,
+        "price": 74275.66
+      },
+      {
+        "index": 102,
+        "price": 74198
+      }
+    ],
+    "swing_lows": [
+      {
+        "index": 11,
+        "price": 72728.85
+      },
+      {
+        "index": 21,
+        "price": 72582.82
+      },
+      {
+        "index": 33,
+        "price": 73189.11
+      },
+      {
+        "index": 45,
+        "price": 72512.49
+      },
+      {
+        "index": 59,
+        "price": 73216
+      },
+      {
+        "index": 78,
+        "price": 73781.3
+      },
+      {
+        "index": 95,
+        "price": 73400
+      },
+      {
+        "index": 119,
+        "price": 70686.68
+      }
+    ],
+    "resistance_levels": [
+      {
+        "price": 74101.166,
+        "touches": 5
+      },
+      {
+        "price": 73706.215,
+        "touches": 2
+      },
+      {
+        "price": 74514.1,
+        "touches": 1
+      }
+    ],
+    "support_levels": [],
+    "suggested_long_setup": {
+      "direction": "long",
+      "entry": 67528.79,
+      "stop": 66963.06182728,
+      "targets": [
+        74101.166,
+        73706.215
+      ],
+      "rationale": "Long bias (transition structure): stop below swing low 70686.6800, targets at resistance cluster(s)."
+    },
+    "suggested_short_setup": {
+      "direction": "short",
+      "entry": 67528.79,
+      "stop": 74342.91402159,
+      "targets": [
+        53900.54195682,
+        47086.41793523
+      ],
+      "rationale": "Short bias (transition structure): stop above swing high 74198.0000, targets at support cluster(s)."
+    }
+  }
+}

@@ -54,6 +54,25 @@ BIST_SECTORS: dict[str, str] = {
 BENCHMARK_DEFAULT = "XU100"  # XU100 → ^XU100
 
 
+def _ticker_for_alias(alias: str) -> str | None:
+    if alias == BENCHMARK_DEFAULT:
+        return "^XU100"
+    return BIST_SECTORS.get(alias)
+
+
+def _bar_close(bar: Any) -> float | None:
+    if isinstance(bar, dict):
+        close = bar.get("close")
+    else:
+        close = getattr(bar, "close", None)
+    if close is None:
+        return None
+    try:
+        return float(close)
+    except (TypeError, ValueError):
+        return None
+
+
 async def fetch_sector_closes(
     sectors: list[str] | None = None,
     period: str = "3mo",
@@ -67,10 +86,11 @@ async def fetch_sector_closes(
     Returns {alias: [closes,...]}. Failed fetches are skipped silently.
     """
     selected = sectors or list(BIST_SECTORS.keys())
-    tickers = [BIST_SECTORS[s] for s in selected if s in BIST_SECTORS]
-    aliases = [s for s in selected if s in BIST_SECTORS]
+    alias_tickers = [(s, _ticker_for_alias(s)) for s in selected]
+    alias_tickers = [(alias, ticker) for alias, ticker in alias_tickers if ticker]
+    aliases = [alias for alias, _ticker in alias_tickers]
 
-    tasks = [fetch_eod_ohlcv(t, period=period) for t in tickers]
+    tasks = [fetch_eod_ohlcv(ticker, period=period) for _alias, ticker in alias_tickers]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     out: dict[str, list[float]] = {}
@@ -79,10 +99,10 @@ async def fetch_sector_closes(
             continue
         if not isinstance(res, list):
             continue
-        closes = [bar.get("close") for bar in res
-                   if isinstance(bar, dict) and bar.get("close") is not None]
+        closes = [_bar_close(bar) for bar in res]
+        closes = [close for close in closes if close is not None]
         if len(closes) >= 5:
-            out[alias] = [float(c) for c in closes]
+            out[alias] = closes
     return out
 
 

@@ -1,19 +1,15 @@
-# Claude + bist-trader-mcp + tradingview-mcp birlikte kullanım
+# Claude + bist-trader-mcp (tek MCP — TradingView dahili)
 
-Bu doküman senin makinende **iki MCP'yi Claude Desktop'a bağlama** akışını anlatır. Yan yana çalıştığında Claude TR finans datasını çekiyor, sonra TradingView Desktop'a Pine indicator + chart annotation + alert basıyor.
+Bu doküman **tek MCP** (`bist-trader`) ile Claude/Cursor akışını anlatır. TR finans datası + price-action plan + TradingView çizimi aynı sunucuda; arka planda `tradingview-mcp` Node CLI olarak çalışır (`TRADINGVIEW_MCP_PATH`).
 
 ## Yapıldı ✅ (otomatik kuruldu)
 
 - ✅ Node.js 24.14 + npm 11.11 (zaten kuruluydu)
 - ✅ `bist-trader-mcp` kurulu — `C:\Users\parlak\Downloads\tr-fixedincome-mcp\`
 - ✅ `tradesdontlie/tradingview-mcp` klonlandı — `C:\Users\parlak\Downloads\tradingview-mcp\`
-- ✅ npm install complete (78 tool hazır)
-- ✅ Server.js plain start verified (no import/syntax errors)
-- ✅ Claude Desktop config güncellendi: `%APPDATA%\Claude\claude_desktop_config.json`
-  - Mevcut `preferences` korundu
-  - `mcpServers` eklendi: `bist-trader` + `tradingview`
-  - Backup: `claude_desktop_config.json.backup_20260511_212352`
-- ✅ Tüm path'ler exists ve valid
+- ✅ npm install complete (tradingview-mcp CLI)
+- ✅ Cursor `.cursor/mcp.json` — yalnızca `bist-trader` (+ `TRADINGVIEW_MCP_PATH`)
+- ✅ `tv_*` proxy araçları + `run_trade_assistant` bist-trader içinde kayıtlı
 
 ## Senin yapacakların (manuel, 3 adım)
 
@@ -51,11 +47,7 @@ JSON dönerse CDP aktif.
 
 Config dosyası değişti — Claude Desktop'ın yeni `mcpServers` listesini görmesi için **tamamen kapatıp yeniden açmak gerek** (system tray'dan da kapat).
 
-Yeniden açıldığında settings → MCP bölümünde iki sunucu görünmeli:
-- `bist-trader` (Python)
-- `tradingview` (Node)
-
-İkisi de "Connected" durumunda olmalı. **Eğer hata varsa**: Settings → MCP → Logs bölümünde stderr'leri gör.
+Yeniden açıldığında settings → MCP bölümünde **yalnızca** `bist-trader` görünmeli (Connected). İkinci `tradingview` satırını config'den kaldırabilirsin — aynı iş `tv_health_check`, `tv_fetch_mtf_ohlcv`, `run_trade_assistant` ile yapılır.
 
 ## İlk test (Claude'a yaz)
 
@@ -81,9 +73,8 @@ BIST30 sembolünü TradingView'da aç, üzerine TR makro snapshot
 
 Claude şunları yapmalı:
 1. `bist-trader.render_pine_recipe(name="tr_macro_backdrop", auto_fetch=true)` → live data + Pine code
-2. `tradingview.chart_set_symbol("BIST:XU030")` → TV BIST30'a geçer
-3. `tradingview.pine_new(source=...)` → Pine editor açılır
-4. `tradingview.pine_smart_compile()` → indicator chart'a düşer
+2. `tv_chart_set_symbol("BIST:XU030")` → TV BIST30'a geçer
+3. Pine inject için `apply_trade_to_chart` veya manuel Pine (PA trade için `run_trade_assistant` önerilir)
 
 Üst sağda canlı verilerle bir snapshot table görmelisin (~40% policy, ~32% CPI YoY).
 
@@ -97,7 +88,7 @@ C:\Users\parlak\Downloads\tr-fixedincome-mcp\.venv\Scripts\python.exe -m bist_tr
 ```
 Komut hata verirse venv broken — `pip install -e ".[dev,browser]"` ile yeniden kur.
 
-### "tradingview: ECONNREFUSED localhost:9222"
+### "tv_health_check / CDP failed" (ECONNREFUSED localhost:9222)
 
 TV Desktop CDP mode'da başlatılmamış. Tekrar `launch_tv_debug.bat` çalıştır.
 
@@ -119,6 +110,36 @@ Beklenir. Cache içinden ikinci çağrı çalışır (5 dakika TTL). Veya 1-2 da
 | tradingview-mcp | `C:\Users\parlak\Downloads\tradingview-mcp\` |
 | TV CDP launcher | `C:\Users\parlak\Downloads\tradingview-mcp\scripts\launch_tv_debug.bat` |
 | TCMB EVDS key (env'de) | `IoIJuWdAOb` (bist-trader env içinde) |
+
+## Piyasa profilleri (BIST / VIOP / kripto)
+
+`get_market_profile(symbol)` otomatik algılar ve ayarlar:
+
+| Sınıf | Örnek sembol | HTF / LTF | Risk |
+|--------|----------------|-----------|------|
+| Kripto | `BINANCE:BTCUSDT`, `ETHUSDT` | 4H / 1H | %0.75, notional cap %12 |
+| BIST hisse | `THYAO`, `BIST:GARAN` | Gün / 1H | %1, cap %20 |
+| BIST endeks | `XU030`, `XU100` | Gün / 1H | min kalite A+ |
+| VIOP vadeli | `F_XU0300625` | 4H / 15m | %0.5, cap %15 |
+| VIOP opsiyon | `O_XU0300625_C5500` | 4H / 15m | %0.35, cap %8 |
+
+Asistanlar (`run_scenario_assistant`, `run_trade_assistant`) timeframe vermeden de çalışır — profil varsayılanlarını kullanır. VIOP için ek bağlam: `get_viop_term_structure`, `get_viop_dashboard`.
+
+## Tek MCP Cursor config örneği
+
+```json
+{
+  "mcpServers": {
+    "bist-trader": {
+      "command": "C:\\Users\\parlak\\Downloads\\tr-fixedincome-mcp\\.venv\\Scripts\\python.exe",
+      "args": ["-m", "bist_trader_mcp"],
+      "env": {
+        "TRADINGVIEW_MCP_PATH": "C:\\Users\\parlak\\Downloads\\tradingview-mcp"
+      }
+    }
+  }
+}
+```
 
 ## İki MCP'yi geçici olarak kapatmak
 

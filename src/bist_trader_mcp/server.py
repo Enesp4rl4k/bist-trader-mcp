@@ -19,49 +19,65 @@ from mcp.types import TextContent
 from .http_utils import close_shared_client
 from .tools import (
     aggregate_portfolio_greeks,
+    analyze_chart_scenarios,
+    analyze_elliott_wave,
+    analyze_market_context,
+    analyze_mtf_price_action,
+    analyze_price_action,
+    analyze_range_imbalance,
+    apply_scenario_to_chart,
+    apply_trade_to_chart,
     backtest_strategy,
     calculate_atr_position_size,
     calculate_basis_fair_value,
     calculate_bond_metrics,
-    calculate_kelly_sizing,
-    calculate_performance_panel,
-    calculate_implied_volatility,
-    calculate_option_greeks,
     calculate_correlation_matrix,
     calculate_ewma_volatility,
     calculate_garch_forecast,
+    calculate_implied_volatility,
+    calculate_kelly_sizing,
+    calculate_option_greeks,
+    calculate_performance_panel,
     calculate_portfolio_var,
     calculate_realized_vol,
     calculate_rolling_correlation,
     calculate_technicals,
+    design_from_price_action,
+    design_ltf_trade_plan,
+    design_mtf_trade_plan,
+    design_scenario_trade_plan,
+    design_trade_setup,
     find_viop_spread_opportunities,
     fit_yield_curve_nss,
+    get_bist_eod_ohlcv,
     get_bist_sector_rotation,
+    get_bist_snapshot,
     get_btc_network_stats,
     get_crypto_fear_greed,
-    get_eth_gas_oracle,
     get_crypto_funding_rates,
     get_crypto_klines,
     get_crypto_open_interest,
     get_crypto_spots,
     get_deribit_iv_surface,
-    get_news_headlines,
+    get_dibs_auctions,
+    get_economic_calendar,
+    get_eth_gas_oracle,
+    get_foreign_ownership,
+    get_fx_forward_curve,
     get_global_fx_history,
     get_global_fx_matrix,
     get_global_fx_spot,
     get_global_pulse,
-    get_bist_eod_ohlcv,
-    get_bist_snapshot,
-    get_dibs_auctions,
-    get_economic_calendar,
-    get_foreign_ownership,
-    get_fx_forward_curve,
     get_health_status,
     get_kap_disclosures,
+    get_market_profile,
     get_market_summary,
     get_mkk_market_stats,
+    get_news_headlines,
     get_repo_curve,
     get_tcmb_policy_rates,
+    get_trade_playbook_rules,
+    get_turib_endeks_overview,
     get_viop_dashboard,
     get_viop_iv_surface,
     get_viop_margin_call_alerts,
@@ -74,10 +90,27 @@ from .tools import (
     list_pine_recipes,
     list_signal_generators,
     list_strategy_templates,
+    list_trade_journal,
+    log_trade_plan,
+    monitor_open_trades,
     optimize_portfolio_markowitz,
+    pine_payload_from_trade_plan,
+    portfolio_risk_check,
     render_pine_recipe,
+    run_market_assistant,
+    run_scenario_assistant,
+    run_trade_assistant,
+    scan_mtf_watchlist,
+    scan_price_action_watchlist,
     simulate_option_strategy,
     stress_test_portfolio,
+    tv_chart_set_symbol,
+    tv_chart_set_timeframe,
+    tv_data_get_ohlcv,
+    tv_fetch_mtf_ohlcv,
+    tv_health_check,
+    update_trade_status,
+    validate_trade_consistency,
 )
 
 server: Server = Server("bist-trader-mcp")
@@ -233,6 +266,20 @@ _register(
         only_material=bool(args.get("only_material", False)),
         limit=int(args.get("limit", 100)),
     ),
+)
+
+
+# --- TÜRİB (commodity indices, public) ------------------------------------
+
+_register(
+    "get_turib_endeks_overview",
+    description=(
+        "TÜRİB public hububat/tarım endeks özeti (buğday, mısır, arpa, hububat). "
+        "Bilgi amaçlı — canlı ELÜS derinlik için lisanslı veri dağıtıcı gerekir. "
+        "XGIDA / gıda hisseleri ve makro bağlam için teknik analizle çapraz kullanın."
+    ),
+    input_schema={"type": "object", "properties": {}},
+    handler=lambda args: get_turib_endeks_overview(),
 )
 
 
@@ -1374,6 +1421,952 @@ _register(
     ),
 )
 
+# --- Price action + position design (v0.9) --------------------------------
+
+_register(
+    "analyze_price_action",
+    description=(
+        "Universal price action analysis on any OHLCV series: fractal swing "
+        "highs/lows, market structure (bullish/bearish/ranging), FVG/IFVG "
+        "imbalances, range box (discount/premium), support and "
+        "resistance clusters, directional bias, and suggested long/short "
+        "setups with entry/stop/targets. Feed bars from TradingView "
+        "data_get_ohlcv, get_crypto_klines, or get_bist_eod_ohlcv."
+    ),
+    input_schema={
+        "type": "object",
+        "required": ["closes", "highs", "lows"],
+        "properties": {
+            "closes": {"type": "array", "items": {"type": "number"}},
+            "highs": {"type": "array", "items": {"type": "number"}},
+            "lows": {"type": "array", "items": {"type": "number"}},
+            "swing_lookback": {"type": "integer", "default": 5},
+            "sr_tolerance_pct": {"type": "number", "default": 0.003},
+        },
+    },
+    handler=lambda args: analyze_price_action(
+        closes=args.get("closes") or [],
+        highs=args.get("highs") or [],
+        lows=args.get("lows") or [],
+        swing_lookback=int(args.get("swing_lookback", 5)),
+        sr_tolerance_pct=float(args.get("sr_tolerance_pct", 0.003)),
+    ),
+)
+
+_register(
+    "analyze_range_imbalance",
+    description=(
+        "Range-trade specialist: horizontal box (discount/premium/EQ), "
+        "liquidity sweeps, FVG/IFVG stacks, range-aligned imbalances, and "
+        "fade/breakout play recommendation. Use when market is ranging or "
+        "for mean-reversion planning on BIST/VIOP/crypto OHLCV."
+    ),
+    input_schema={
+        "type": "object",
+        "required": ["closes", "highs", "lows"],
+        "properties": {
+            "closes": {"type": "array", "items": {"type": "number"}},
+            "highs": {"type": "array", "items": {"type": "number"}},
+            "lows": {"type": "array", "items": {"type": "number"}},
+            "volumes": {"type": "array", "items": {"type": "number"}},
+            "swing_lookback": {"type": "integer", "default": 5},
+            "range_window": {"type": "integer", "default": 48},
+            "market": {"type": "string"},
+            "symbol": {"type": "string"},
+        },
+    },
+    handler=lambda args: analyze_range_imbalance(
+        closes=args.get("closes") or [],
+        highs=args.get("highs") or [],
+        lows=args.get("lows") or [],
+        volumes=args.get("volumes"),
+        swing_lookback=int(args.get("swing_lookback", 5)),
+        range_window=int(args.get("range_window", 48)),
+        market=args.get("market"),
+        symbol=args.get("symbol"),
+    ),
+)
+
+_register(
+    "get_market_profile",
+    description=(
+        "Detect BIST / VIOP / crypto and return tuned PA, Elliott, timeframe, "
+        "risk, and TradingView symbol (symbol_tv)."
+    ),
+    input_schema={
+        "type": "object",
+        "required": ["symbol"],
+        "properties": {
+            "symbol": {"type": "string"},
+            "market": {
+                "type": "string",
+                "description": "Override: crypto, bist, bist_index, viop, viop_option",
+            },
+        },
+    },
+    handler=lambda args: get_market_profile(
+        str(args["symbol"]),
+        market=args.get("market"),
+    ),
+)
+
+_register(
+    "analyze_elliott_wave",
+    description=(
+        "Elliott Wave on one timeframe: zigzag pivots, impulse/ABC hypotheses, "
+        "rule_checklist, fib grades, wave traits, channel, projections, report_tr."
+    ),
+    input_schema={
+        "type": "object",
+        "required": ["closes", "highs", "lows"],
+        "properties": {
+            "closes": {"type": "array", "items": {"type": "number"}},
+            "highs": {"type": "array", "items": {"type": "number"}},
+            "lows": {"type": "array", "items": {"type": "number"}},
+            "times": {"type": "array", "items": {"type": "integer"}},
+            "swing_lookback": {"type": "integer", "default": 5},
+        },
+    },
+    handler=lambda args: analyze_elliott_wave(
+        closes=args.get("closes") or [],
+        highs=args.get("highs") or [],
+        lows=args.get("lows") or [],
+        times=args.get("times"),
+        swing_lookback=int(args.get("swing_lookback", 5)),
+    ),
+)
+
+_register(
+    "analyze_chart_scenarios",
+    description=(
+        "Merge PA MTF + HTF Elliott: ranked scenarios (continuation, ABC, "
+        "alternate count, conflict). Returns report + trade_candidate flag."
+    ),
+    input_schema={
+        "type": "object",
+        "required": ["symbol", "htf_closes", "htf_highs", "htf_lows", "ltf_closes", "ltf_highs", "ltf_lows"],
+        "properties": {
+            "symbol": {"type": "string"},
+            "htf_closes": {"type": "array", "items": {"type": "number"}},
+            "htf_highs": {"type": "array", "items": {"type": "number"}},
+            "htf_lows": {"type": "array", "items": {"type": "number"}},
+            "ltf_closes": {"type": "array", "items": {"type": "number"}},
+            "ltf_highs": {"type": "array", "items": {"type": "number"}},
+            "ltf_lows": {"type": "array", "items": {"type": "number"}},
+            "htf_times": {"type": "array", "items": {"type": "integer"}},
+            "htf_label": {"type": "string", "default": "240"},
+            "ltf_label": {"type": "string", "default": "60"},
+            "min_ew_score": {"type": "number"},
+            "market": {"type": "string"},
+        },
+    },
+    handler=lambda args: analyze_chart_scenarios(
+        symbol=str(args["symbol"]),
+        htf_closes=args.get("htf_closes") or [],
+        htf_highs=args.get("htf_highs") or [],
+        htf_lows=args.get("htf_lows") or [],
+        ltf_closes=args.get("ltf_closes") or [],
+        ltf_highs=args.get("ltf_highs") or [],
+        ltf_lows=args.get("ltf_lows") or [],
+        htf_times=args.get("htf_times"),
+        ltf_times=args.get("ltf_times"),
+        htf_label=str(args.get("htf_label", "240")),
+        ltf_label=str(args.get("ltf_label", "60")),
+        min_ew_score=args.get("min_ew_score"),
+        market=args.get("market"),
+    ),
+)
+
+_register(
+    "analyze_market_context",
+    description=(
+        "Unified fundamental + technical analysis: PA MTF, range/FVG, "
+        "HTF/LTF Elliott alignment, confidence gates, and KAP/BIST/VIOP/crypto "
+        "research checklist. Set fetch_fundamentals=true to also pull LIVE "
+        "fundamentals (F/K, ROE, KAP tone, funding, sector) + run the fusion "
+        "gate offline (no TradingView needed)."
+    ),
+    input_schema={
+        "type": "object",
+        "required": ["symbol", "htf_closes", "htf_highs", "htf_lows", "ltf_closes", "ltf_highs", "ltf_lows"],
+        "properties": {
+            "symbol": {"type": "string"},
+            "htf_closes": {"type": "array", "items": {"type": "number"}},
+            "htf_highs": {"type": "array", "items": {"type": "number"}},
+            "htf_lows": {"type": "array", "items": {"type": "number"}},
+            "ltf_closes": {"type": "array", "items": {"type": "number"}},
+            "ltf_highs": {"type": "array", "items": {"type": "number"}},
+            "ltf_lows": {"type": "array", "items": {"type": "number"}},
+            "htf_times": {"type": "array", "items": {"type": "integer"}},
+            "ltf_times": {"type": "array", "items": {"type": "integer"}},
+            "htf_volumes": {"type": "array", "items": {"type": "number"}},
+            "ltf_volumes": {"type": "array", "items": {"type": "number"}},
+            "htf_label": {"type": "string", "default": "240"},
+            "ltf_label": {"type": "string", "default": "60"},
+            "market": {"type": "string"},
+            "min_ew_score": {"type": "number"},
+            "fetch_fundamentals": {"type": "boolean", "default": False},
+        },
+    },
+    handler=lambda args: analyze_market_context(
+        symbol=str(args["symbol"]),
+        htf_closes=args.get("htf_closes") or [],
+        htf_highs=args.get("htf_highs") or [],
+        htf_lows=args.get("htf_lows") or [],
+        ltf_closes=args.get("ltf_closes") or [],
+        ltf_highs=args.get("ltf_highs") or [],
+        ltf_lows=args.get("ltf_lows") or [],
+        htf_times=args.get("htf_times"),
+        ltf_times=args.get("ltf_times"),
+        htf_volumes=args.get("htf_volumes"),
+        ltf_volumes=args.get("ltf_volumes"),
+        htf_label=str(args.get("htf_label", "240")),
+        ltf_label=str(args.get("ltf_label", "60")),
+        market=args.get("market"),
+        min_ew_score=args.get("min_ew_score"),
+        fetch_fundamentals=bool(args.get("fetch_fundamentals", False)),
+    ),
+)
+
+_register(
+    "design_trade_setup",
+    description=(
+        "Design a complete trade plan with explicit entry/stop/targets: "
+        "position sizing (% equity risk), R:R validation (default min 1:2), "
+        "and approved/reject gate. Works for any market symbol."
+    ),
+    input_schema={
+        "type": "object",
+        "required": ["symbol", "direction", "entry_price", "stop_price", "target_prices"],
+        "properties": {
+            "symbol": {"type": "string"},
+            "direction": {"type": "string", "enum": ["long", "short"]},
+            "entry_price": {"type": "number"},
+            "stop_price": {"type": "number"},
+            "target_prices": {"type": "array", "items": {"type": "number"}},
+            "equity": {"type": "number", "default": 100000},
+            "risk_per_trade_pct": {"type": "number", "default": 1.0},
+            "min_risk_reward": {"type": "number", "default": 2.0},
+            "closes": {"type": "array", "items": {"type": "number"}},
+            "highs": {"type": "array", "items": {"type": "number"}},
+            "lows": {"type": "array", "items": {"type": "number"}},
+        },
+    },
+    handler=lambda args: design_trade_setup(
+        symbol=str(args["symbol"]),
+        direction=str(args["direction"]),
+        entry_price=float(args["entry_price"]),
+        stop_price=float(args["stop_price"]),
+        target_prices=args.get("target_prices") or [],
+        equity=float(args.get("equity", 100_000)),
+        risk_per_trade_pct=float(args.get("risk_per_trade_pct", 1.0)),
+        min_risk_reward=float(args.get("min_risk_reward", 2.0)),
+        closes=args.get("closes"),
+        highs=args.get("highs"),
+        lows=args.get("lows"),
+    ),
+)
+
+_register(
+    "design_from_price_action",
+    description=(
+        "One-shot PA workflow: analyze OHLCV structure, auto-pick long or "
+        "short setup (or pass direction), size the trade, and validate R:R. "
+        "Primary tool for AI-driven price action position design."
+    ),
+    input_schema={
+        "type": "object",
+        "required": ["symbol", "closes", "highs", "lows"],
+        "properties": {
+            "symbol": {"type": "string"},
+            "closes": {"type": "array", "items": {"type": "number"}},
+            "highs": {"type": "array", "items": {"type": "number"}},
+            "lows": {"type": "array", "items": {"type": "number"}},
+            "direction": {"type": "string", "enum": ["long", "short"]},
+            "equity": {"type": "number", "default": 100000},
+            "risk_per_trade_pct": {"type": "number", "default": 1.0},
+            "min_risk_reward": {"type": "number", "default": 2.0},
+        },
+    },
+    handler=lambda args: design_from_price_action(
+        symbol=str(args["symbol"]),
+        closes=args.get("closes") or [],
+        highs=args.get("highs") or [],
+        lows=args.get("lows") or [],
+        direction=args.get("direction"),
+        equity=float(args.get("equity", 100_000)),
+        risk_per_trade_pct=float(args.get("risk_per_trade_pct", 1.0)),
+        min_risk_reward=float(args.get("min_risk_reward", 2.0)),
+    ),
+)
+
+_register(
+    "portfolio_risk_check",
+    description=(
+        "Portfolio risk gate before opening a new trade: max open positions "
+        "(5), total open risk (5% equity), single-asset notional cap (20%), "
+        "optional daily loss limit. Pass open_positions list and optional "
+        "proposed_trade from design_trade_setup."
+    ),
+    input_schema={
+        "type": "object",
+        "required": ["equity"],
+        "properties": {
+            "equity": {"type": "number"},
+            "open_positions": {"type": "array", "items": {"type": "object"}},
+            "proposed_trade": {"type": "object"},
+            "rules": {"type": "object"},
+        },
+    },
+    handler=lambda args: portfolio_risk_check(
+        equity=float(args["equity"]),
+        open_positions=args.get("open_positions"),
+        proposed_trade=args.get("proposed_trade"),
+        rules=args.get("rules"),
+    ),
+)
+
+_register(
+    "pine_payload_from_trade_plan",
+    description=(
+        "Convert a design_trade_setup / design_from_price_action output into "
+        "placeholders for render_pine_recipe('pa_trade_overlay')."
+    ),
+    input_schema={
+        "type": "object",
+        "required": ["plan"],
+        "properties": {
+            "plan": {"type": "object"},
+            "as_of_date": {"type": "string", "description": "YYYY-MM-DD"},
+        },
+    },
+    handler=lambda args: pine_payload_from_trade_plan(
+        plan=args.get("plan") or {},
+        as_of_date=args.get("as_of_date"),
+    ),
+)
+
+_register(
+    "analyze_mtf_price_action",
+    description=(
+        "Multi-timeframe PA: HTF structure/bias + LTF setup alignment. "
+        "Returns trade_quality (a_plus/a/b/conflict) and recommended_setup. "
+        "Fetch HTF bars (e.g. 4H/D) and LTF bars (e.g. 15m/1H) via TradingView "
+        "or get_crypto_klines."
+    ),
+    input_schema={
+        "type": "object",
+        "required": [
+            "htf_closes", "htf_highs", "htf_lows",
+            "ltf_closes", "ltf_highs", "ltf_lows",
+        ],
+        "properties": {
+            "htf_closes": {"type": "array", "items": {"type": "number"}},
+            "htf_highs": {"type": "array", "items": {"type": "number"}},
+            "htf_lows": {"type": "array", "items": {"type": "number"}},
+            "ltf_closes": {"type": "array", "items": {"type": "number"}},
+            "ltf_highs": {"type": "array", "items": {"type": "number"}},
+            "ltf_lows": {"type": "array", "items": {"type": "number"}},
+            "htf_label": {"type": "string", "default": "HTF"},
+            "ltf_label": {"type": "string", "default": "LTF"},
+        },
+    },
+    handler=lambda args: analyze_mtf_price_action(
+        htf_closes=args.get("htf_closes") or [],
+        htf_highs=args.get("htf_highs") or [],
+        htf_lows=args.get("htf_lows") or [],
+        ltf_closes=args.get("ltf_closes") or [],
+        ltf_highs=args.get("ltf_highs") or [],
+        ltf_lows=args.get("ltf_lows") or [],
+        htf_label=str(args.get("htf_label", "HTF")),
+        ltf_label=str(args.get("ltf_label", "LTF")),
+    ),
+)
+
+_register(
+    "scan_price_action_watchlist",
+    description=(
+        "Scan multiple symbols for PA setups. Pass pre-fetched OHLCV per "
+        "symbol; returns ranked top_setups by score (R:R + structure + bias)."
+    ),
+    input_schema={
+        "type": "object",
+        "required": ["series"],
+        "properties": {
+            "series": {"type": "object", "description": "{symbol: {closes, highs, lows}}"},
+            "directions": {"type": "array", "items": {"type": "string", "enum": ["long", "short"]}},
+            "equity": {"type": "number", "default": 100000},
+            "min_risk_reward": {"type": "number", "default": 2.0},
+            "min_score": {"type": "number", "default": 0.0},
+        },
+    },
+    handler=lambda args: scan_price_action_watchlist(
+        series=args.get("series") or {},
+        directions=args.get("directions"),
+        equity=float(args.get("equity", 100_000)),
+        min_risk_reward=float(args.get("min_risk_reward", 2.0)),
+        min_score=float(args.get("min_score", 0.0)),
+    ),
+)
+
+_register(
+    "scan_mtf_watchlist",
+    description=(
+        "MTF watchlist scan: each symbol needs htf + ltf OHLCV blocks. "
+        "Filters by trade_quality (default min 'a')."
+    ),
+    input_schema={
+        "type": "object",
+        "required": ["series"],
+        "properties": {
+            "series": {
+                "type": "object",
+                "description": "{symbol: {htf: {closes,highs,lows}, ltf: {...}}}",
+            },
+            "equity": {"type": "number", "default": 100000},
+            "min_risk_reward": {"type": "number", "default": 2.0},
+            "min_quality": {"type": "string", "default": "a"},
+        },
+    },
+    handler=lambda args: scan_mtf_watchlist(
+        series=args.get("series") or {},
+        equity=float(args.get("equity", 100_000)),
+        min_risk_reward=float(args.get("min_risk_reward", 2.0)),
+        min_quality=str(args.get("min_quality", "a")),
+    ),
+)
+
+_register(
+    "log_trade_plan",
+    description="Persist an approved trade plan to local journal (~/.bist-trader/trade_journal.json).",
+    input_schema={
+        "type": "object",
+        "required": ["plan"],
+        "properties": {
+            "plan": {"type": "object"},
+            "status": {"type": "string", "enum": ["planned", "open", "closed", "cancelled"], "default": "planned"},
+            "notes": {"type": "string"},
+            "journal_path": {"type": "string"},
+        },
+    },
+    handler=lambda args: log_trade_plan(
+        plan=args.get("plan") or {},
+        status=str(args.get("status", "planned")),
+        notes=args.get("notes"),
+        journal_path=args.get("journal_path"),
+    ),
+)
+
+_register(
+    "list_trade_journal",
+    description="List trade journal entries; filter by status or symbol.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "status": {"type": "string", "enum": ["planned", "open", "closed", "cancelled"]},
+            "symbol": {"type": "string"},
+            "limit": {"type": "integer", "default": 50},
+            "journal_path": {"type": "string"},
+        },
+    },
+    handler=lambda args: list_trade_journal(
+        status=args.get("status"),
+        symbol=args.get("symbol"),
+        limit=int(args.get("limit", 50)),
+        journal_path=args.get("journal_path"),
+    ),
+)
+
+_register(
+    "update_trade_status",
+    description="Update journal trade status, optional exit price and PnL.",
+    input_schema={
+        "type": "object",
+        "required": ["trade_id", "status"],
+        "properties": {
+            "trade_id": {"type": "string"},
+            "status": {"type": "string", "enum": ["planned", "open", "closed", "cancelled"]},
+            "exit_price": {"type": "number"},
+            "pnl": {"type": "number"},
+            "notes": {"type": "string"},
+            "journal_path": {"type": "string"},
+        },
+    },
+    handler=lambda args: update_trade_status(
+        trade_id=str(args["trade_id"]),
+        status=str(args["status"]),
+        exit_price=args.get("exit_price"),
+        pnl=args.get("pnl"),
+        notes=args.get("notes"),
+        journal_path=args.get("journal_path"),
+    ),
+)
+
+_register(
+    "monitor_open_trades",
+    description=(
+        "Monitor open journal trades against mark_prices dict "
+        "(symbol -> latest price). Alerts on stop hit / TP2 zone."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "mark_prices": {"type": "object", "additionalProperties": {"type": "number"}},
+            "journal_path": {"type": "string"},
+        },
+    },
+    handler=lambda args: monitor_open_trades(
+        mark_prices=args.get("mark_prices"),
+        journal_path=args.get("journal_path"),
+    ),
+)
+
+_register(
+    "apply_trade_to_chart",
+    description=(
+        "One-shot chart apply: set symbol/TF, draw TradingView Long/Short "
+        "position tool (Forecasting menu) with entry/stop/TP box. "
+        "Requires TradingView Desktop CDP on port 9222 + tradingview-mcp CLI."
+    ),
+    input_schema={
+        "type": "object",
+        "required": ["plan"],
+        "properties": {
+            "plan": {"type": "object", "description": "Output from design_mtf_trade_plan or design_ltf_trade_plan"},
+            "symbol": {"type": "string"},
+            "timeframe": {"type": "string"},
+            "clear_drawings": {"type": "boolean", "default": True},
+            "inject_pine": {"type": "boolean", "default": False},
+            "draw_levels": {"type": "boolean", "default": True},
+        },
+    },
+    handler=lambda args: apply_trade_to_chart(
+        plan=args.get("plan") or {},
+        symbol=args.get("symbol"),
+        timeframe=args.get("timeframe"),
+        clear_drawings=bool(args.get("clear_drawings", True)),
+        inject_pine=bool(args.get("inject_pine", False)),
+        draw_levels=bool(args.get("draw_levels", True)),
+    ),
+)
+
+_register(
+    "get_trade_playbook_rules",
+    description=(
+        "Canonical trade consistency rules + workflow. AI must read this before "
+        "every trade decision — same checklist, same gates, every time."
+    ),
+    input_schema={"type": "object", "properties": {}},
+    handler=lambda args: get_trade_playbook_rules(),
+)
+
+_register(
+    "design_mtf_trade_plan",
+    description=(
+        "PRIMARY trade tool: HTF+LTF OHLCV → MTF alignment → detailed plan "
+        "(thesis, execution, partial TPs, management) → consistency validation "
+        "→ portfolio gate. Returns approved/no_trade + trade_report."
+    ),
+    input_schema={
+        "type": "object",
+        "required": [
+            "symbol",
+            "htf_closes", "htf_highs", "htf_lows",
+            "ltf_closes", "ltf_highs", "ltf_lows",
+        ],
+        "properties": {
+            "symbol": {"type": "string"},
+            "htf_closes": {"type": "array", "items": {"type": "number"}},
+            "htf_highs": {"type": "array", "items": {"type": "number"}},
+            "htf_lows": {"type": "array", "items": {"type": "number"}},
+            "ltf_closes": {"type": "array", "items": {"type": "number"}},
+            "ltf_highs": {"type": "array", "items": {"type": "number"}},
+            "ltf_lows": {"type": "array", "items": {"type": "number"}},
+            "htf_label": {"type": "string", "default": "HTF"},
+            "ltf_label": {"type": "string", "default": "LTF"},
+            "equity": {"type": "number", "default": 100000},
+            "risk_per_trade_pct": {"type": "number", "default": 1.0},
+            "min_risk_reward": {"type": "number", "default": 2.0},
+            "open_positions": {"type": "array", "items": {"type": "object"}},
+            "rules": {"type": "object"},
+            "journal_path": {"type": "string"},
+        },
+    },
+    handler=lambda args: design_mtf_trade_plan(
+        symbol=str(args["symbol"]),
+        htf_closes=args.get("htf_closes") or [],
+        htf_highs=args.get("htf_highs") or [],
+        htf_lows=args.get("htf_lows") or [],
+        ltf_closes=args.get("ltf_closes") or [],
+        ltf_highs=args.get("ltf_highs") or [],
+        ltf_lows=args.get("ltf_lows") or [],
+        htf_label=str(args.get("htf_label", "HTF")),
+        ltf_label=str(args.get("ltf_label", "LTF")),
+        equity=float(args.get("equity", 100_000)),
+        risk_per_trade_pct=float(args.get("risk_per_trade_pct", 1.0)),
+        min_risk_reward=float(args.get("min_risk_reward", 2.0)),
+        open_positions=args.get("open_positions"),
+        rules=args.get("rules"),
+        journal_path=args.get("journal_path"),
+    ),
+)
+
+_register(
+    "design_ltf_trade_plan",
+    description=(
+        "Single-TF trade plan with same enrich + validate + portfolio pipeline "
+        "as design_mtf_trade_plan. Use when only one timeframe is available."
+    ),
+    input_schema={
+        "type": "object",
+        "required": ["symbol", "closes", "highs", "lows"],
+        "properties": {
+            "symbol": {"type": "string"},
+            "closes": {"type": "array", "items": {"type": "number"}},
+            "highs": {"type": "array", "items": {"type": "number"}},
+            "lows": {"type": "array", "items": {"type": "number"}},
+            "direction": {"type": "string", "enum": ["long", "short"]},
+            "equity": {"type": "number", "default": 100000},
+            "risk_per_trade_pct": {"type": "number", "default": 1.0},
+            "min_risk_reward": {"type": "number", "default": 2.0},
+            "open_positions": {"type": "array", "items": {"type": "object"}},
+            "rules": {"type": "object"},
+            "journal_path": {"type": "string"},
+        },
+    },
+    handler=lambda args: design_ltf_trade_plan(
+        symbol=str(args["symbol"]),
+        closes=args.get("closes") or [],
+        highs=args.get("highs") or [],
+        lows=args.get("lows") or [],
+        direction=args.get("direction"),
+        equity=float(args.get("equity", 100_000)),
+        risk_per_trade_pct=float(args.get("risk_per_trade_pct", 1.0)),
+        min_risk_reward=float(args.get("min_risk_reward", 2.0)),
+        open_positions=args.get("open_positions"),
+        rules=args.get("rules"),
+        journal_path=args.get("journal_path"),
+    ),
+)
+
+_register(
+    "validate_trade_consistency",
+    description=(
+        "Run playbook checklist on a plan: MTF quality, structure, R:R, "
+        "stop/ATR sanity, journal conflicts. Same rules every trade."
+    ),
+    input_schema={
+        "type": "object",
+        "required": ["plan"],
+        "properties": {
+            "plan": {"type": "object"},
+            "mtf": {"type": "object"},
+            "open_trades": {"type": "array", "items": {"type": "object"}},
+            "journal_path": {"type": "string"},
+            "rules": {"type": "object"},
+        },
+    },
+    handler=lambda args: validate_trade_consistency(
+        plan=args.get("plan") or {},
+        mtf=args.get("mtf"),
+        open_trades=args.get("open_trades"),
+        journal_path=args.get("journal_path"),
+        rules=args.get("rules"),
+    ),
+)
+
+_register(
+    "run_trade_assistant",
+    description=(
+        "ALL-IN-ONE trade assistant (single MCP): TV health → MTF OHLCV → "
+        "design_mtf_trade_plan → draw Long/Short position → optional journal/alerts. "
+        "Requires TradingView CDP on :9222."
+    ),
+    input_schema={
+        "type": "object",
+        "required": ["symbol", "ltf_timeframe"],
+        "properties": {
+            "symbol": {"type": "string"},
+            "ltf_timeframe": {"type": "string"},
+            "htf_timeframe": {"type": "string", "default": "240"},
+            "equity": {"type": "number", "default": 100000},
+            "risk_per_trade_pct": {"type": "number", "default": 1.0},
+            "min_risk_reward": {"type": "number", "default": 2.0},
+            "open_positions": {"type": "array", "items": {"type": "object"}},
+            "rules": {"type": "object"},
+            "journal_path": {"type": "string"},
+            "draw_on_chart": {"type": "boolean", "default": True},
+            "log_journal": {"type": "boolean", "default": True},
+            "set_alerts": {"type": "boolean", "default": False},
+        },
+    },
+    handler=lambda args: run_trade_assistant(
+        symbol=str(args["symbol"]),
+        ltf_timeframe=args.get("ltf_timeframe"),
+        htf_timeframe=args.get("htf_timeframe"),
+        market=args.get("market"),
+        equity=float(args.get("equity", 100_000)),
+        risk_per_trade_pct=args.get("risk_per_trade_pct"),
+        min_risk_reward=args.get("min_risk_reward"),
+        open_positions=args.get("open_positions"),
+        rules=args.get("rules"),
+        journal_path=args.get("journal_path"),
+        draw_on_chart=bool(args.get("draw_on_chart", True)),
+        log_journal=bool(args.get("log_journal", True)),
+        set_alerts=bool(args.get("set_alerts", False)),
+    ),
+)
+
+_register(
+    "design_scenario_trade_plan",
+    description=(
+        "Like design_mtf_trade_plan but gated by analyze_chart_scenarios "
+        "(PA + Elliott alignment required)."
+    ),
+    input_schema={
+        "type": "object",
+        "required": ["symbol", "htf_closes", "htf_highs", "htf_lows", "ltf_closes", "ltf_highs", "ltf_lows"],
+        "properties": {
+            "symbol": {"type": "string"},
+            "htf_closes": {"type": "array", "items": {"type": "number"}},
+            "htf_highs": {"type": "array", "items": {"type": "number"}},
+            "htf_lows": {"type": "array", "items": {"type": "number"}},
+            "ltf_closes": {"type": "array", "items": {"type": "number"}},
+            "ltf_highs": {"type": "array", "items": {"type": "number"}},
+            "ltf_lows": {"type": "array", "items": {"type": "number"}},
+            "htf_times": {"type": "array", "items": {"type": "integer"}},
+            "htf_label": {"type": "string", "default": "240"},
+            "ltf_label": {"type": "string", "default": "60"},
+            "equity": {"type": "number", "default": 100000},
+            "risk_per_trade_pct": {"type": "number", "default": 1.0},
+            "min_risk_reward": {"type": "number", "default": 2.0},
+            "min_ew_score": {"type": "number", "default": 35},
+            "open_positions": {"type": "array", "items": {"type": "object"}},
+            "rules": {"type": "object"},
+            "journal_path": {"type": "string"},
+        },
+    },
+    handler=lambda args: design_scenario_trade_plan(
+        symbol=str(args["symbol"]),
+        htf_closes=args.get("htf_closes") or [],
+        htf_highs=args.get("htf_highs") or [],
+        htf_lows=args.get("htf_lows") or [],
+        ltf_closes=args.get("ltf_closes") or [],
+        ltf_highs=args.get("ltf_highs") or [],
+        ltf_lows=args.get("ltf_lows") or [],
+        htf_times=args.get("htf_times"),
+        htf_label=str(args.get("htf_label", "240")),
+        ltf_label=str(args.get("ltf_label", "60")),
+        equity=float(args.get("equity", 100_000)),
+        risk_per_trade_pct=float(args.get("risk_per_trade_pct", 1.0)),
+        min_risk_reward=float(args.get("min_risk_reward", 2.0)),
+        min_ew_score=float(args.get("min_ew_score", 35)),
+        open_positions=args.get("open_positions"),
+        rules=args.get("rules"),
+        journal_path=args.get("journal_path"),
+    ),
+)
+
+_register(
+    "run_market_assistant",
+    description=(
+        "PRIMARY trade assistant: TradingView OHLCV → live fundamentals "
+        "(KAP / funding / snapshot) + technical (PA, range, FVG, EW MTF) → "
+        "trade plan → chat_report for LLM → chart overlay (PA, EW, position, "
+        "fundamental banner). Requires TV CDP :9222."
+    ),
+    input_schema={
+        "type": "object",
+        "required": ["symbol"],
+        "properties": {
+            "symbol": {"type": "string"},
+            "market": {"type": "string"},
+            "ltf_timeframe": {"type": "string"},
+            "htf_timeframe": {"type": "string"},
+            "equity": {"type": "number", "default": 100000},
+            "risk_per_trade_pct": {"type": "number"},
+            "min_risk_reward": {"type": "number"},
+            "min_ew_score": {"type": "number"},
+            "open_positions": {"type": "array", "items": {"type": "object"}},
+            "rules": {"type": "object"},
+            "journal_path": {"type": "string"},
+            "fetch_fundamentals": {"type": "boolean", "default": True},
+            "draw_on_chart": {"type": "boolean", "default": True},
+            "draw_when_no_trade": {"type": "boolean", "default": True},
+            "log_journal": {"type": "boolean", "default": True},
+        },
+    },
+    handler=lambda args: run_market_assistant(
+        symbol=str(args["symbol"]),
+        ltf_timeframe=args.get("ltf_timeframe"),
+        htf_timeframe=args.get("htf_timeframe"),
+        market=args.get("market"),
+        equity=float(args.get("equity", 100_000)),
+        risk_per_trade_pct=args.get("risk_per_trade_pct"),
+        min_risk_reward=args.get("min_risk_reward"),
+        min_ew_score=args.get("min_ew_score"),
+        open_positions=args.get("open_positions"),
+        rules=args.get("rules"),
+        journal_path=args.get("journal_path"),
+        fetch_fundamentals=bool(args.get("fetch_fundamentals", True)),
+        draw_on_chart=bool(args.get("draw_on_chart", True)),
+        draw_when_no_trade=bool(args.get("draw_when_no_trade", True)),
+        log_journal=bool(args.get("log_journal", True)),
+    ),
+)
+
+_register(
+    "run_scenario_assistant",
+    description=(
+        "Alias of run_market_assistant (temel + teknik + TV). "
+        "Use run_market_assistant for new integrations."
+    ),
+    input_schema={
+        "type": "object",
+        "required": ["symbol"],
+        "properties": {
+            "symbol": {"type": "string"},
+            "market": {"type": "string"},
+            "ltf_timeframe": {"type": "string"},
+            "htf_timeframe": {"type": "string"},
+            "equity": {"type": "number", "default": 100000},
+            "risk_per_trade_pct": {"type": "number"},
+            "min_risk_reward": {"type": "number"},
+            "min_ew_score": {"type": "number"},
+            "open_positions": {"type": "array", "items": {"type": "object"}},
+            "rules": {"type": "object"},
+            "journal_path": {"type": "string"},
+            "draw_on_chart": {"type": "boolean", "default": True},
+            "log_journal": {"type": "boolean", "default": True},
+        },
+    },
+    handler=lambda args: run_scenario_assistant(
+        symbol=str(args["symbol"]),
+        ltf_timeframe=args.get("ltf_timeframe"),
+        htf_timeframe=args.get("htf_timeframe"),
+        market=args.get("market"),
+        equity=float(args.get("equity", 100_000)),
+        risk_per_trade_pct=args.get("risk_per_trade_pct"),
+        min_risk_reward=args.get("min_risk_reward"),
+        min_ew_score=args.get("min_ew_score"),
+        open_positions=args.get("open_positions"),
+        rules=args.get("rules"),
+        journal_path=args.get("journal_path"),
+        draw_on_chart=bool(args.get("draw_on_chart", True)),
+        log_journal=bool(args.get("log_journal", True)),
+    ),
+)
+
+_register(
+    "apply_scenario_to_chart",
+    description=(
+        "Draw Elliott wave trend lines + point labels; optional position "
+        "from plan. Pass primary_scenario from analyze_chart_scenarios."
+    ),
+    input_schema={
+        "type": "object",
+        "required": ["scenario"],
+        "properties": {
+            "scenario": {"type": "object"},
+            "symbol": {"type": "string"},
+            "timeframe": {"type": "string"},
+            "htf_timeframe": {"type": "string"},
+            "ltf_timeframe": {"type": "string"},
+            "bar_times": {"type": "array", "items": {"type": "integer"}},
+            "ltf_times": {"type": "array", "items": {"type": "integer"}},
+            "ltf_closes": {"type": "array", "items": {"type": "number"}},
+            "ltf_highs": {"type": "array", "items": {"type": "number"}},
+            "mtf": {"type": "object", "description": "MTF PA pack (ltf_analysis, htf_structure, trade_quality)"},
+            "plan": {"type": "object"},
+            "clear_drawings": {"type": "boolean", "default": True},
+            "draw_pa": {"type": "boolean", "default": True},
+            "draw_position": {"type": "boolean", "default": True},
+        },
+    },
+    handler=lambda args: apply_scenario_to_chart(
+        scenario=args.get("scenario") or {},
+        symbol=args.get("symbol"),
+        timeframe=args.get("timeframe"),
+        htf_timeframe=args.get("htf_timeframe"),
+        ltf_timeframe=args.get("ltf_timeframe"),
+        bar_times=args.get("bar_times"),
+        ltf_times=args.get("ltf_times"),
+        ltf_closes=args.get("ltf_closes"),
+        ltf_highs=args.get("ltf_highs"),
+        mtf=args.get("mtf"),
+        plan=args.get("plan"),
+        clear_drawings=bool(args.get("clear_drawings", True)),
+        draw_pa=bool(args.get("draw_pa", True)),
+        draw_position=bool(args.get("draw_position", True)),
+    ),
+)
+
+_register(
+    "tv_health_check",
+    description="TradingView CDP connection (built-in — no separate tradingview MCP).",
+    input_schema={"type": "object", "properties": {}},
+    handler=lambda args: tv_health_check(),
+)
+
+_register(
+    "tv_fetch_mtf_ohlcv",
+    description="Fetch LTF + HTF OHLCV from TradingView chart via CDP.",
+    input_schema={
+        "type": "object",
+        "required": ["symbol", "ltf_timeframe", "htf_timeframe"],
+        "properties": {
+            "symbol": {"type": "string"},
+            "ltf_timeframe": {"type": "string"},
+            "htf_timeframe": {"type": "string"},
+            "bars": {"type": "integer", "default": 200},
+        },
+    },
+    handler=lambda args: tv_fetch_mtf_ohlcv(
+        symbol=str(args["symbol"]),
+        ltf_timeframe=str(args["ltf_timeframe"]),
+        htf_timeframe=str(args["htf_timeframe"]),
+        bars=int(args.get("bars", 200)),
+    ),
+)
+
+_register(
+    "tv_chart_set_symbol",
+    description="Set TradingView chart symbol (CDP).",
+    input_schema={
+        "type": "object",
+        "required": ["symbol"],
+        "properties": {"symbol": {"type": "string"}},
+    },
+    handler=lambda args: tv_chart_set_symbol(str(args["symbol"])),
+)
+
+_register(
+    "tv_chart_set_timeframe",
+    description="Set TradingView chart timeframe (CDP).",
+    input_schema={
+        "type": "object",
+        "required": ["timeframe"],
+        "properties": {"timeframe": {"type": "string"}},
+    },
+    handler=lambda args: tv_chart_set_timeframe(str(args["timeframe"])),
+)
+
+_register(
+    "tv_data_get_ohlcv",
+    description="Get OHLCV from current TradingView chart.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "count": {"type": "integer", "default": 200},
+            "summary": {"type": "boolean", "default": False},
+        },
+    },
+    handler=lambda args: tv_data_get_ohlcv(
+        count=int(args.get("count", 200)),
+        summary=bool(args.get("summary", False)),
+    ),
+)
+
 
 # --- Volatility forecasting (v0.7) ---------------------------------------
 
@@ -2053,6 +3046,91 @@ PROMPTS_REGISTRY: dict[str, dict[str, Any]] = {
             "horizon_days=1, annual_volatility_pct=35.0) — VaR + ES.\n"
             "3. stress_test_portfolio(positions=<above>) — built-in scenario suite.\n"
             "4. En kötü 3 senaryoyu, net delta konsantrasyonunu, ve gamma riskini Türkçe özetle."
+        ),
+    },
+    "price-action-trade-design": {
+        "description": (
+            "Tutarlı PA trade playbook: HTF+LTF analiz, detaylı execution plan, "
+            "checklist validation, Long/Short position çizimi, journal. "
+            "Her trade aynı kurallardan geçer."
+        ),
+        "arguments": [
+            PromptArgument(
+                name="symbol",
+                description="TradingView symbol, e.g. BINANCE:BTCUSDT",
+                required=True,
+            ),
+            PromptArgument(
+                name="timeframe",
+                description="LTF chart TF, e.g. 60, 15",
+                required=True,
+            ),
+            PromptArgument(
+                name="htf_timeframe",
+                description="HTF for bias, e.g. 240, D (default 4x LTF)",
+                required=False,
+            ),
+            PromptArgument(
+                name="equity",
+                description="Account equity (default 100000)",
+                required=False,
+            ),
+        ],
+        "render": lambda args: (
+            f"Trade Assistant (temel + teknik) — {args['symbol']}:\n\n"
+            "=== 0. KURALLAR ===\n"
+            "get_trade_playbook_rules()\n\n"
+            "=== 1. TEK KOMUT (önerilen) ===\n"
+            f"run_market_assistant(\n"
+            f"  symbol='{args['symbol']}',\n"
+            "  market=<auto: crypto|bist|viop>,\n"
+            f"  ltf_timeframe='{args['timeframe']}'  # optional — profile default\n"
+            f"  htf_timeframe='{args.get('htf_timeframe', '')}'  # optional\n"
+            f"  equity={float(args.get('equity', 100000))},\n"
+            "  fetch_fundamentals=true,\n"
+            "  draw_on_chart=true,\n"
+            "  draw_when_no_trade=true,\n"
+            "  log_journal=true\n"
+            ")\n"
+            "→ KAP/funding + PA/EW + chat_report.report_tr + TradingView çizimi\n\n"
+            "=== 1a. Chat-only (TV kapalı) ===\n"
+            "tv_fetch_mtf_ohlcv veya get_bist_eod_ohlcv → analyze_market_context\n\n"
+            "=== 1b. Offline senaryo (veri elindeyse) ===\n"
+            "analyze_chart_scenarios → design_scenario_trade_plan → apply_scenario_to_chart\n\n"
+            "=== 2. TradingView önkoşul ===\n"
+            "launch_tv_debug.bat (port 9222). İkinci MCP gerekmez.\n\n"
+            "=== 3. RAPOR ===\n"
+            "trade_report + thesis + execution_plan + validation.checks. "
+            "Red ise no_trade açıkla."
+        ),
+    },
+    "trade-assistant": {
+        "description": (
+            "Temel+teknik fusion: run_market_assistant → fusion.trade_allowed, "
+            "chat_report.report_tr, TradingView PA/EW/position."
+        ),
+        "arguments": [
+            PromptArgument(
+                name="symbol",
+                description="BIST:ASELS, BINANCE:BTCUSDT, …",
+                required=True,
+            ),
+            PromptArgument(
+                name="market",
+                description="bist | crypto | viop (optional auto)",
+                required=False,
+            ),
+        ],
+        "render": lambda args: (
+            f"Trade assistant — {args['symbol']}:\n\n"
+            "1. TradingView CDP (9222) açık olmalı.\n"
+            f"2. run_market_assistant(symbol='{args['symbol']}', "
+            f"market={args.get('market') or 'auto'}, fetch_fundamentals=true, "
+            "draw_on_chart=true)\n"
+            "3. Kullanıcıya yalnızca JSON'daki chat_report.report_tr özetini Türkçe ver.\n"
+            "4. fusion.trade_allowed=false ise pozisyon çizilmez — fusion uyarılarını açıkla.\n"
+            "5. Ek temel: get_kap_disclosures, get_bist_sector_rotation, get_turib_endeks_overview.\n"
+            "Yatırım tavsiyesi değildir."
         ),
     },
 }

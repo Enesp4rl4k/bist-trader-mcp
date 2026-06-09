@@ -1,0 +1,21 @@
+//@version=6
+// PA stats only — NO lines. Position box is drawn via apply_trade_to_chart (Long/Short tool).
+indicator("PA Stats — {{SYMBOL}} {{DIRECTION}}", overlay = true, max_boxes_count = 0, max_lines_count = 0)
+
+riskPct  = {{RISK_PCT}}
+units    = {{UNITS}}
+bestRR   = {{RISK_REWARD}}
+isLong   = "{{DIRECTION}}" == "long"
+
+var table info = table.new(position.top_right, 2, 5, bgcolor = color.new(color.black, 80))
+if barstate.islast
+    table.cell(info, 0, 0, "Risk", text_color = color.gray, text_size = size.small)
+    table.cell(info, 1, 0, str.tostring(riskPct) + "%", text_color = color.white, text_size = size.small)
+    table.cell(info, 0, 1, "Qty", text_color = color.gray, text_size = size.small)
+    table.cell(info, 1, 1, str.tostring(units, "#.####"), text_color = color.white, text_size = size.small)
+    table.cell(info, 0, 2, "R:R", text_color = color.gray, text_size = size.small)
+    table.cell(info, 1, 2, str.tostring(bestRR, "#.##"), text_color = color.white, text_size = size.small)
+    table.cell(info, 0, 3, "Side", text_color = color.gray, text_size = size.small)
+    table.cell(info, 1, 3, "{{DIRECTION}}", text_color = isLong ? color.lime : color.orange, text_size = size.small)
+    table.cell(info, 0, 4, "As of", text_color = color.gray, text_size = size.small)
+    table.cell(info, 1, 4, "{{AS_OF_DATE}}", text_color = color.white, text_size = size.small)

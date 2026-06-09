@@ -14,52 +14,77 @@ from typing import Any
 from ._wip import wip_payload
 from .backtest import SIGNAL_GENERATORS, run_backtest
 from .bist_eod import fetch_eod_ohlcv
-from .bist_snapshot import fetch_market_summary as _fetch_market_summary
 from .bist_sectors import (
     BIST_SECTORS,
     compute_rotation_metrics,
     fetch_sector_closes,
 )
+from .bist_snapshot import fetch_market_summary as _fetch_market_summary
 from .bist_snapshot import fetch_snapshot as _fetch_snapshot
 from .bond_math import bond_metrics
 from .calendar_data import build_calendar as _build_calendar
+from .chart_scenarios import (
+    analyze_chart_scenarios as _analyze_chart_scenarios,
+)
+from .chart_scenarios import (
+    design_scenario_trade_plan as _design_scenario_trade_plan,
+)
 from .correlation import correlation_matrix as _correlation_matrix
 from .correlation import rolling_correlation as _rolling_correlation
-from .deribit import build_deribit_surface, fetch_deribit_option_chain
-from .fear_greed import fetch_fear_greed
 from .crypto import (
     fetch_binance_klines,
     fetch_coin_spots,
     fetch_funding_rates,
     fetch_open_interest_history,
 )
+from .deribit import build_deribit_surface, fetch_deribit_option_chain
+from .elliott_wave import analyze_elliott_wave as _analyze_elliott_wave
 from .evds import EVDSClient, EVDSError, EVDSObservation
+from .fear_greed import fetch_fear_greed
 from .fx import fx_forward_curve as _fx_forward_curve
 from .global_fx import fetch_fx_history, fetch_fx_matrix, fetch_fx_spot
 from .global_markets import fetch_global_pulse
 from .hazine import fetch_auctions
 from .http_utils import SourceError
 from .iv_surface import build_iv_surface, find_spread_opportunities
+from .kap import fetch_disclosures
 from .kelly import kelly_panel, position_size_from_atr
+from .market_assistant import (
+    analyze_market_context as _analyze_market_context,
+)
+from .market_assistant import (
+    run_market_assistant as _run_market_assistant,
+)
+from .market_profiles import (
+    get_market_profile as _get_market_profile,
+)
+from .market_profiles import (
+    resolve_assistant_config as _resolve_assistant_config,
+)
+from .mkk import fetch_foreign_ownership, fetch_market_stats
+from .mtf_analysis import analyze_mtf_price_action as _analyze_mtf_price_action
 from .news import NEWS_FEEDS, fetch_news
 from .onchain import fetch_btc_network_stats, fetch_eth_gas_oracle
-from .performance import performance_panel
-from .portfolio_opt import optimize_portfolio
-from .realized_vol import realized_vol_panel
-from .strategies import STRATEGY_TEMPLATES, StrategyLeg, simulate_strategy
-from .vol_forecast import ewma_volatility, garch_forecast
-from .yield_fitter import (
-    evaluate_curve_grid,
-    fit_nelson_siegel,
-)
-from .kap import fetch_disclosures
-from .mkk import fetch_foreign_ownership, fetch_market_stats
 from .options_math import black_scholes, implied_volatility
+from .pa_scanner import scan_mtf_watchlist as _scan_mtf_watchlist
+from .pa_scanner import scan_price_action_watchlist as _scan_price_action_watchlist
+from .performance import performance_panel
 from .portfolio import aggregate_portfolio_greeks as _aggregate_portfolio_greeks
 from .portfolio import calculate_portfolio_var as _calc_var
 from .portfolio import stress_test_portfolio as _stress_test
+from .portfolio_opt import optimize_portfolio
+from .position_design import (
+    design_from_price_action as _design_from_price_action,
+)
+from .position_design import (
+    design_trade_setup as _design_trade_setup,
+)
+from .position_design import (
+    portfolio_risk_check as _portfolio_risk_check,
+)
+from .price_action import analyze_price_action as _analyze_price_action
+from .realized_vol import realized_vol_panel
 from .recipes import list_recipes, render_recipe
-from .technicals import compute_snapshot as _tech_snapshot
 from .series_catalog import (
     CPI_HEADLINE,
     DIBS_YIELD_SERIES,
@@ -68,12 +93,82 @@ from .series_catalog import (
     USDTRY_SELLING,
     list_known_series,
 )
+from .strategies import STRATEGY_TEMPLATES, StrategyLeg, simulate_strategy
 from .takasbank import (
     fetch_margin_change_alerts,
     fetch_margin_parameters,
     fetch_viop_margin_snapshot,
 )
+from .technicals import compute_snapshot as _tech_snapshot
+from .trade_journal import (
+    list_trade_journal as _list_trade_journal,
+)
+from .trade_journal import (
+    log_trade_plan as _log_trade_plan,
+)
+from .trade_journal import (
+    monitor_open_trades as _monitor_open_trades,
+)
+from .trade_journal import (
+    update_trade_status as _update_trade_status,
+)
+from .trade_playbook import (
+    design_ltf_trade_plan as _design_ltf_trade_plan,
+)
+from .trade_playbook import (
+    design_mtf_trade_plan as _design_mtf_trade_plan,
+)
+from .trade_playbook import (
+    enrich_trade_plan as _enrich_trade_plan,
+)
+from .trade_playbook import (
+    get_trade_playbook_rules as _get_trade_playbook_rules,
+)
+from .trade_playbook import (
+    run_trade_assistant as _run_trade_assistant,
+)
+from .trade_playbook import (
+    validate_trade_consistency as _validate_trade_consistency,
+)
+from .tv_bridge import (
+    apply_scenario_to_chart as _apply_scenario_to_chart,
+)
+from .tv_bridge import (
+    apply_trade_plan_to_chart as _apply_trade_plan_to_chart,
+)
+from .tv_tools import (
+    tv_alert_create as _tv_alert_create,
+)
+from .tv_tools import (
+    tv_capture_screenshot as _tv_capture_screenshot,
+)
+from .tv_tools import (
+    tv_chart_get_state as _tv_chart_get_state,
+)
+from .tv_tools import (
+    tv_chart_set_symbol as _tv_chart_set_symbol,
+)
+from .tv_tools import (
+    tv_chart_set_timeframe as _tv_chart_set_timeframe,
+)
+from .tv_tools import (
+    tv_data_get_ohlcv as _tv_data_get_ohlcv,
+)
+from .tv_tools import (
+    tv_draw_clear as _tv_draw_clear,
+)
+from .tv_tools import (
+    tv_fetch_mtf_ohlcv as _tv_fetch_mtf_ohlcv,
+)
+from .tv_tools import (
+    tv_health_check as _tv_health_check,
+)
 from .viop import fetch_daily_settlement, fetch_option_chain, fetch_term_structure
+from .vol_forecast import ewma_volatility, garch_forecast
+from .yield_fitter import (
+    evaluate_curve_grid,
+    fit_nelson_siegel,
+)
 
 
 def _observations_to_series(
@@ -1549,6 +1644,13 @@ def calculate_basis_fair_value(
 # -----------------------------------------------------------------------------
 # Real-time snapshot — "piyasa şu an ne durumda?"
 # -----------------------------------------------------------------------------
+async def get_turib_endeks_overview() -> dict[str, Any]:
+    """TÜRİB public hububat/tarım endeks özeti (bilgi amaçlı, lisanslı feed değil)."""
+    from .turib import fetch_turib_endeks_overview
+
+    return await fetch_turib_endeks_overview()
+
+
 async def get_bist_snapshot(
     tickers: list[str],
 ) -> dict[str, Any]:
@@ -2635,7 +2737,11 @@ async def get_bist_sector_rotation(
         try:
             from .bist_eod import fetch_eod_ohlcv
             bench = await fetch_eod_ohlcv("^XU100", period=period)
-            benchmark_closes = [b["close"] for b in bench if b.get("close")]
+            benchmark_closes = [
+                float(b.close)
+                for b in bench
+                if getattr(b, "close", None) is not None
+            ]
         except SourceError:
             benchmark_closes = None
 
@@ -2765,3 +2871,814 @@ def calculate_rolling_correlation(
         "rolling_correlation": vals,
         "latest": next((v for v in reversed(vals) if v is not None), None),
     }
+
+
+# -----------------------------------------------------------------------------
+# Price action + position design (v0.9)
+# -----------------------------------------------------------------------------
+def analyze_price_action(
+    closes: list[float],
+    highs: list[float],
+    lows: list[float],
+    swing_lookback: int = 5,
+    sr_tolerance_pct: float = 0.003,
+) -> dict[str, Any]:
+    """Swing structure, S/R clusters, bias, and suggested long/short setups."""
+    try:
+        return {
+            "source": "bist-trader-mcp — price_action.analyze_price_action",
+            **_analyze_price_action(
+                closes=closes or [],
+                highs=highs or [],
+                lows=lows or [],
+                swing_lookback=int(swing_lookback),
+                sr_tolerance_pct=float(sr_tolerance_pct),
+            ),
+        }
+    except (TypeError, ValueError) as e:
+        return {"error": "bad_input", "detail": str(e)}
+
+
+def analyze_range_imbalance(
+    closes: list[float],
+    highs: list[float],
+    lows: list[float],
+    *,
+    volumes: list[float] | None = None,
+    swing_lookback: int = 5,
+    range_window: int = 48,
+    market: str | None = None,
+    symbol: str | None = None,
+) -> dict[str, Any]:
+    """Range box + FVG/IFVG stacks + liquidity sweeps — range-trade specialist view."""
+    from .market_profiles import resolve_assistant_config
+    from .pa_imbalances import build_imbalance_panel
+    from .pa_range import build_range_panel
+    from .price_action import analyze_price_action as _core_pa
+    from .technicals import atr
+
+    try:
+        cfg = resolve_assistant_config(symbol or "SYNTH", market=market) if symbol else {}
+        rw = int(cfg.get("range_window_bars", range_window)) if cfg else range_window
+        pa = _core_pa(
+            closes, highs, lows,
+            volumes=volumes,
+            swing_lookback=swing_lookback,
+        )
+        atr_val = pa.get("atr_14")
+        if atr_val is None:
+            series = atr(highs, lows, closes, 14)
+            atr_val = next((v for v in reversed(series) if v is not None), None)
+        range_panel = build_range_panel(
+            highs, lows, closes,
+            atr_val=atr_val,
+            swing_high_prices=[s["price"] for s in pa.get("swing_highs", [])],
+            swing_low_prices=[s["price"] for s in pa.get("swing_lows", [])],
+            structure=pa.get("market_structure", "ranging"),
+            window=rw,
+        )
+        box = range_panel.get("box") or {}
+        imb = build_imbalance_panel(highs, lows, closes, atr_val=atr_val, range_box=box)
+        return {
+            "source": "bist-trader-mcp — analyze_range_imbalance",
+            "symbol": symbol,
+            "market_structure": pa.get("market_structure"),
+            "bias": pa.get("bias"),
+            "range": range_panel,
+            "imbalances": imb,
+            "suggested_long": pa.get("suggested_long_setup"),
+            "suggested_short": pa.get("suggested_short_setup"),
+            "notes": (
+                "Range-trade mode: fade discount/premium, sweep fades, breakout at box break. "
+                "Stacked FVGs in range_aligned boost confluence."
+            ),
+        }
+    except (TypeError, ValueError) as e:
+        return {"error": "bad_input", "detail": str(e)}
+
+
+def design_trade_setup(
+    symbol: str,
+    direction: str,
+    entry_price: float,
+    stop_price: float,
+    target_prices: list[float],
+    equity: float = 100_000.0,
+    risk_per_trade_pct: float = 1.0,
+    min_risk_reward: float = 2.0,
+    closes: list[float] | None = None,
+    highs: list[float] | None = None,
+    lows: list[float] | None = None,
+) -> dict[str, Any]:
+    """Full trade plan: R:R check, position sizing, approval gate."""
+    if direction not in ("long", "short"):
+        return {"error": "bad_input", "detail": "direction must be long or short"}
+    return _design_trade_setup(
+        symbol=symbol,
+        direction=direction,  # type: ignore[arg-type]
+        entry_price=float(entry_price),
+        stop_price=float(stop_price),
+        target_prices=target_prices or [],
+        equity=float(equity),
+        risk_per_trade_pct=float(risk_per_trade_pct),
+        min_risk_reward=float(min_risk_reward),
+        closes=closes,
+        highs=highs,
+        lows=lows,
+    )
+
+
+def design_from_price_action(
+    symbol: str,
+    closes: list[float],
+    highs: list[float],
+    lows: list[float],
+    direction: str | None = None,
+    equity: float = 100_000.0,
+    risk_per_trade_pct: float = 1.0,
+    min_risk_reward: float = 2.0,
+) -> dict[str, Any]:
+    """Analyze OHLCV, pick setup from structure, size and validate the plan."""
+    dir_arg = None
+    if direction is not None:
+        if direction not in ("long", "short"):
+            return {"error": "bad_input", "detail": "direction must be long or short"}
+        dir_arg = direction  # type: ignore[assignment]
+    return _design_from_price_action(
+        symbol=symbol,
+        closes=closes or [],
+        highs=highs or [],
+        lows=lows or [],
+        direction=dir_arg,
+        equity=float(equity),
+        risk_per_trade_pct=float(risk_per_trade_pct),
+        min_risk_reward=float(min_risk_reward),
+    )
+
+
+def portfolio_risk_check(
+    equity: float,
+    open_positions: list[dict[str, Any]] | None = None,
+    proposed_trade: dict[str, Any] | None = None,
+    rules: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Portfolio gate: max positions, total risk, single-asset exposure."""
+    return _portfolio_risk_check(
+        equity=float(equity),
+        open_positions=open_positions,
+        proposed_trade=proposed_trade,
+        rules=rules,
+    )
+
+
+def pine_payload_from_trade_plan(
+    plan: dict[str, Any],
+    as_of_date: str | None = None,
+) -> dict[str, Any]:
+    """Build render_pine_recipe('pa_trade_overlay') placeholders from a trade plan."""
+    from datetime import date
+
+    if plan.get("error"):
+        return {"error": "invalid_plan", "detail": str(plan.get("detail", plan["error"]))}
+    targets = plan.get("targets") or []
+    tp1 = targets[0]["price"] if len(targets) > 0 else 0
+    tp2 = targets[1]["price"] if len(targets) > 1 else 0
+    sizing = plan.get("sizing") or {}
+    return {
+        "SYMBOL": plan.get("symbol", "UNKNOWN"),
+        "DIRECTION": plan.get("direction", "long"),
+        "ENTRY": plan.get("entry", 0),
+        "STOP": plan.get("stop", 0),
+        "TP1": tp1,
+        "TP2": tp2,
+        "RISK_PCT": sizing.get("risk_per_trade_pct", 1.0),
+        "UNITS": round(float(sizing.get("units") or 0), 4),
+        "RISK_REWARD": plan.get("best_risk_reward", 0),
+        "AS_OF_DATE": as_of_date or date.today().isoformat(),
+    }
+
+
+def analyze_mtf_price_action(
+    htf_closes: list[float],
+    htf_highs: list[float],
+    htf_lows: list[float],
+    ltf_closes: list[float],
+    ltf_highs: list[float],
+    ltf_lows: list[float],
+    htf_label: str = "HTF",
+    ltf_label: str = "LTF",
+) -> dict[str, Any]:
+    """HTF bias + LTF entry alignment (A+ / conflict grading)."""
+    try:
+        return {
+            "source": "bist-trader-mcp — mtf_analysis.analyze_mtf_price_action",
+            **_analyze_mtf_price_action(
+                htf_closes=htf_closes or [],
+                htf_highs=htf_highs or [],
+                htf_lows=htf_lows or [],
+                ltf_closes=ltf_closes or [],
+                ltf_highs=ltf_highs or [],
+                ltf_lows=ltf_lows or [],
+                htf_label=htf_label,
+                ltf_label=ltf_label,
+            ),
+        }
+    except (TypeError, ValueError) as e:
+        return {"error": "bad_input", "detail": str(e)}
+
+
+def scan_price_action_watchlist(
+    series: dict[str, dict[str, list[float]]],
+    directions: list[str] | None = None,
+    equity: float = 100_000.0,
+    min_risk_reward: float = 2.0,
+    min_score: float = 0.0,
+) -> dict[str, Any]:
+    """Rank PA setups across a watchlist (pre-fetched OHLCV per symbol)."""
+    dirs = None
+    if directions:
+        dirs = [d for d in directions if d in ("long", "short")]
+    return _scan_price_action_watchlist(
+        series=series or {},
+        directions=dirs,  # type: ignore[arg-type]
+        equity=float(equity),
+        min_risk_reward=float(min_risk_reward),
+        min_score=float(min_score),
+    )
+
+
+def scan_mtf_watchlist(
+    series: dict[str, dict[str, dict[str, list[float]]]],
+    equity: float = 100_000.0,
+    min_risk_reward: float = 2.0,
+    min_quality: str = "a",
+) -> dict[str, Any]:
+    """MTF watchlist scan — HTF bias + LTF setup per symbol."""
+    return _scan_mtf_watchlist(
+        series=series or {},
+        equity=float(equity),
+        min_risk_reward=float(min_risk_reward),
+        min_quality=str(min_quality),
+    )
+
+
+def log_trade_plan(
+    plan: dict[str, Any],
+    status: str = "planned",
+    notes: str | None = None,
+    journal_path: str | None = None,
+) -> dict[str, Any]:
+    """Save trade plan to local journal JSON."""
+    if status not in ("planned", "open", "closed", "cancelled"):
+        return {"error": "bad_input", "detail": "invalid status"}
+    return _log_trade_plan(
+        plan=_unwrap_trade_plan(plan),
+        status=status,  # type: ignore[arg-type]
+        notes=notes,
+        journal_path=journal_path,
+    )
+
+
+def list_trade_journal(
+    status: str | None = None,
+    symbol: str | None = None,
+    limit: int = 50,
+    journal_path: str | None = None,
+) -> dict[str, Any]:
+    """List journal entries; filter by status or symbol."""
+    st = status if status in ("planned", "open", "closed", "cancelled") else None
+    return _list_trade_journal(
+        status=st,  # type: ignore[arg-type]
+        symbol=symbol,
+        limit=int(limit),
+        journal_path=journal_path,
+    )
+
+
+def update_trade_status(
+    trade_id: str,
+    status: str,
+    exit_price: float | None = None,
+    pnl: float | None = None,
+    notes: str | None = None,
+    journal_path: str | None = None,
+) -> dict[str, Any]:
+    """Update journal trade status (open / closed / cancelled)."""
+    if status not in ("planned", "open", "closed", "cancelled"):
+        return {"error": "bad_input", "detail": "invalid status"}
+    return _update_trade_status(
+        trade_id=trade_id,
+        status=status,  # type: ignore[arg-type]
+        exit_price=exit_price,
+        pnl=pnl,
+        notes=notes,
+        journal_path=journal_path,
+    )
+
+
+def monitor_open_trades(
+    mark_prices: dict[str, float] | None = None,
+    journal_path: str | None = None,
+) -> dict[str, Any]:
+    """Monitor open journal trades vs latest mark prices."""
+    return _monitor_open_trades(
+        mark_prices=mark_prices,
+        journal_path=journal_path,
+    )
+
+
+def _unwrap_trade_plan(payload: dict[str, Any]) -> dict[str, Any]:
+    """Accept flat plan or design_mtf_trade_plan / design_ltf_trade_plan wrapper."""
+    if payload.get("plan") and isinstance(payload["plan"], dict):
+        inner = payload["plan"]
+        if inner.get("entry") is not None:
+            return inner
+    return payload
+
+
+def get_trade_playbook_rules() -> dict[str, Any]:
+    """Canonical consistency rules — AI must follow for every trade."""
+    return _get_trade_playbook_rules()
+
+
+def validate_trade_consistency(
+    plan: dict[str, Any],
+    mtf: dict[str, Any] | None = None,
+    open_trades: list[dict[str, Any]] | None = None,
+    journal_path: str | None = None,
+    rules: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Same checklist every time: MTF quality, structure, R:R, journal conflict."""
+    return _validate_trade_consistency(
+        _unwrap_trade_plan(plan),
+        mtf=mtf,
+        open_trades=open_trades,
+        journal_path=journal_path,
+        rules=rules,
+    )
+
+
+def enrich_trade_plan(
+    plan: dict[str, Any],
+    mtf: dict[str, Any] | None = None,
+    rules: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Add thesis, execution_plan, partial TP rules to a base plan."""
+    p = _unwrap_trade_plan(plan)
+    pa = p.get("price_action")
+    return _enrich_trade_plan(p, mtf=mtf, pa=pa, rules=rules)
+
+
+def design_mtf_trade_plan(
+    symbol: str,
+    htf_closes: list[float],
+    htf_highs: list[float],
+    htf_lows: list[float],
+    ltf_closes: list[float],
+    ltf_highs: list[float],
+    ltf_lows: list[float],
+    htf_label: str = "HTF",
+    ltf_label: str = "LTF",
+    equity: float = 100_000.0,
+    risk_per_trade_pct: float = 1.0,
+    min_risk_reward: float = 2.0,
+    open_positions: list[dict[str, Any]] | None = None,
+    rules: dict[str, Any] | None = None,
+    journal_path: str | None = None,
+) -> dict[str, Any]:
+    """Primary tool: MTF analysis + detailed plan + validation + portfolio gate."""
+    return _design_mtf_trade_plan(
+        symbol=symbol,
+        htf_closes=htf_closes or [],
+        htf_highs=htf_highs or [],
+        htf_lows=htf_lows or [],
+        ltf_closes=ltf_closes or [],
+        ltf_highs=ltf_highs or [],
+        ltf_lows=ltf_lows or [],
+        htf_label=htf_label,
+        ltf_label=ltf_label,
+        equity=float(equity),
+        risk_per_trade_pct=float(risk_per_trade_pct),
+        min_risk_reward=float(min_risk_reward),
+        open_positions=open_positions,
+        rules=rules,
+        journal_path=journal_path,
+    )
+
+
+def design_ltf_trade_plan(
+    symbol: str,
+    closes: list[float],
+    highs: list[float],
+    lows: list[float],
+    direction: str | None = None,
+    equity: float = 100_000.0,
+    risk_per_trade_pct: float = 1.0,
+    min_risk_reward: float = 2.0,
+    open_positions: list[dict[str, Any]] | None = None,
+    rules: dict[str, Any] | None = None,
+    journal_path: str | None = None,
+) -> dict[str, Any]:
+    """Single-TF plan with same enrich + validate + portfolio pipeline."""
+    dir_arg = direction if direction in ("long", "short") else None
+    return _design_ltf_trade_plan(
+        symbol=symbol,
+        closes=closes or [],
+        highs=highs or [],
+        lows=lows or [],
+        direction=dir_arg,
+        equity=float(equity),
+        risk_per_trade_pct=float(risk_per_trade_pct),
+        min_risk_reward=float(min_risk_reward),
+        open_positions=open_positions,
+        rules=rules,
+        journal_path=journal_path,
+    )
+
+
+def analyze_elliott_wave(
+    closes: list[float],
+    highs: list[float],
+    lows: list[float],
+    times: list[int] | None = None,
+    swing_lookback: int = 5,
+) -> dict[str, Any]:
+    """Elliott Wave hypotheses (impulse / ABC) on one OHLCV series — typically HTF."""
+    return _analyze_elliott_wave(
+        closes, highs, lows, times=times, swing_lookback=swing_lookback,
+    )
+
+
+def get_market_profile(symbol: str, market: str | None = None) -> dict[str, Any]:
+    """BIST / VIOP / crypto tuned defaults for PA, Elliott, and assistants."""
+    return _get_market_profile(symbol, market=market)
+
+
+def resolve_assistant_config(
+    symbol: str,
+    market: str | None = None,
+    ltf_timeframe: str | None = None,
+    htf_timeframe: str | None = None,
+    rules: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Merged TV symbol, timeframes, bars, rules for assistant flows."""
+    return _resolve_assistant_config(
+        symbol,
+        market=market,
+        ltf_timeframe=ltf_timeframe,
+        htf_timeframe=htf_timeframe,
+        rules=rules,
+    )
+
+
+def analyze_market_context(
+    symbol: str,
+    htf_closes: list[float],
+    htf_highs: list[float],
+    htf_lows: list[float],
+    ltf_closes: list[float],
+    ltf_highs: list[float],
+    ltf_lows: list[float],
+    htf_times: list[int] | None = None,
+    ltf_times: list[int] | None = None,
+    htf_volumes: list[float] | None = None,
+    ltf_volumes: list[float] | None = None,
+    htf_label: str = "240",
+    ltf_label: str = "60",
+    market: str | None = None,
+    min_ew_score: float | None = None,
+) -> dict[str, Any]:
+    """Technical (PA + range + FVG + EW MTF) + fundamental research checklist."""
+    return _analyze_market_context(
+        symbol=symbol,
+        htf_closes=htf_closes,
+        htf_highs=htf_highs,
+        htf_lows=htf_lows,
+        ltf_closes=ltf_closes,
+        ltf_highs=ltf_highs,
+        ltf_lows=ltf_lows,
+        htf_times=htf_times,
+        ltf_times=ltf_times,
+        htf_volumes=htf_volumes,
+        ltf_volumes=ltf_volumes,
+        htf_label=htf_label,
+        ltf_label=ltf_label,
+        market=market,
+        min_ew_score=min_ew_score,
+    )
+
+
+def analyze_chart_scenarios(
+    symbol: str,
+    htf_closes: list[float],
+    htf_highs: list[float],
+    htf_lows: list[float],
+    ltf_closes: list[float],
+    ltf_highs: list[float],
+    ltf_lows: list[float],
+    htf_times: list[int] | None = None,
+    ltf_times: list[int] | None = None,
+    htf_volumes: list[float] | None = None,
+    ltf_volumes: list[float] | None = None,
+    htf_label: str = "240",
+    ltf_label: str = "60",
+    min_ew_score: float | None = None,
+    market: str | None = None,
+    data_quality: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """PA + MTF + Elliott scenario pack with primary/alternate counts."""
+    return _analyze_chart_scenarios(
+        symbol=symbol,
+        htf_closes=htf_closes,
+        htf_highs=htf_highs,
+        htf_lows=htf_lows,
+        ltf_closes=ltf_closes,
+        ltf_highs=ltf_highs,
+        ltf_lows=ltf_lows,
+        htf_times=htf_times,
+        ltf_times=ltf_times,
+        htf_volumes=htf_volumes,
+        ltf_volumes=ltf_volumes,
+        htf_label=htf_label,
+        ltf_label=ltf_label,
+        min_ew_score=min_ew_score,
+        market=market,
+        data_quality=data_quality,
+    )
+
+
+def design_scenario_trade_plan(
+    symbol: str,
+    htf_closes: list[float],
+    htf_highs: list[float],
+    htf_lows: list[float],
+    ltf_closes: list[float],
+    ltf_highs: list[float],
+    ltf_lows: list[float],
+    htf_times: list[int] | None = None,
+    ltf_times: list[int] | None = None,
+    htf_volumes: list[float] | None = None,
+    ltf_volumes: list[float] | None = None,
+    data_quality: dict[str, Any] | None = None,
+    htf_label: str = "240",
+    ltf_label: str = "60",
+    equity: float = 100_000.0,
+    risk_per_trade_pct: float | None = None,
+    min_risk_reward: float | None = None,
+    min_ew_score: float | None = None,
+    market: str | None = None,
+    open_positions: list[dict[str, Any]] | None = None,
+    rules: dict[str, Any] | None = None,
+    journal_path: str | None = None,
+    max_notional_pct: float | None = None,
+) -> dict[str, Any]:
+    """MTF plan only when PA+EW scenarios align."""
+    return _design_scenario_trade_plan(
+        symbol=symbol,
+        htf_closes=htf_closes,
+        htf_highs=htf_highs,
+        htf_lows=htf_lows,
+        ltf_closes=ltf_closes,
+        ltf_highs=ltf_highs,
+        ltf_lows=ltf_lows,
+        htf_times=htf_times,
+        ltf_times=ltf_times,
+        htf_volumes=htf_volumes,
+        ltf_volumes=ltf_volumes,
+        data_quality=data_quality,
+        htf_label=htf_label,
+        ltf_label=ltf_label,
+        equity=float(equity),
+        risk_per_trade_pct=risk_per_trade_pct,
+        min_risk_reward=min_risk_reward,
+        min_ew_score=min_ew_score,
+        market=market,
+        open_positions=open_positions,
+        rules=rules,
+        journal_path=journal_path,
+        max_notional_pct=max_notional_pct,
+    )
+
+
+def run_market_assistant(
+    symbol: str,
+    ltf_timeframe: str | None = None,
+    htf_timeframe: str | None = None,
+    market: str | None = None,
+    equity: float = 100_000.0,
+    risk_per_trade_pct: float | None = None,
+    min_risk_reward: float | None = None,
+    min_ew_score: float | None = None,
+    open_positions: list[dict[str, Any]] | None = None,
+    rules: dict[str, Any] | None = None,
+    journal_path: str | None = None,
+    fetch_fundamentals: bool = True,
+    draw_on_chart: bool = True,
+    draw_when_no_trade: bool = True,
+    log_journal: bool = True,
+) -> dict[str, Any]:
+    """Trade assistant: TV + temel (KAP/funding) + teknik + chat_report + chart."""
+    return _run_market_assistant(
+        symbol=symbol,
+        ltf_timeframe=ltf_timeframe,
+        htf_timeframe=htf_timeframe,
+        market=market,
+        equity=float(equity),
+        risk_per_trade_pct=risk_per_trade_pct,
+        min_risk_reward=min_risk_reward,
+        min_ew_score=min_ew_score,
+        open_positions=open_positions,
+        rules=rules,
+        journal_path=journal_path,
+        fetch_fundamentals=fetch_fundamentals,
+        draw_on_chart=draw_on_chart,
+        draw_when_no_trade=draw_when_no_trade,
+        log_journal=log_journal,
+    )
+
+
+def run_scenario_assistant(
+    symbol: str,
+    ltf_timeframe: str | None = None,
+    htf_timeframe: str | None = None,
+    market: str | None = None,
+    equity: float = 100_000.0,
+    risk_per_trade_pct: float | None = None,
+    min_risk_reward: float | None = None,
+    min_ew_score: float | None = None,
+    open_positions: list[dict[str, Any]] | None = None,
+    rules: dict[str, Any] | None = None,
+    journal_path: str | None = None,
+    draw_on_chart: bool = True,
+    log_journal: bool = True,
+) -> dict[str, Any]:
+    """Alias of run_market_assistant (PA + EW + temel + TV)."""
+    return run_market_assistant(
+        symbol=symbol,
+        ltf_timeframe=ltf_timeframe,
+        htf_timeframe=htf_timeframe,
+        market=market,
+        equity=float(equity),
+        risk_per_trade_pct=risk_per_trade_pct,
+        min_risk_reward=min_risk_reward,
+        min_ew_score=min_ew_score,
+        open_positions=open_positions,
+        rules=rules,
+        journal_path=journal_path,
+        draw_on_chart=draw_on_chart,
+        log_journal=log_journal,
+    )
+
+
+def apply_scenario_to_chart(
+    scenario: dict[str, Any],
+    symbol: str | None = None,
+    timeframe: str | None = None,
+    htf_timeframe: str | None = None,
+    ltf_timeframe: str | None = None,
+    bar_times: list[int] | None = None,
+    ltf_times: list[int] | None = None,
+    ltf_closes: list[float] | None = None,
+    ltf_highs: list[float] | None = None,
+    mtf: dict[str, Any] | None = None,
+    plan: dict[str, Any] | None = None,
+    clear_drawings: bool = True,
+    draw_pa: bool = True,
+    draw_position: bool = True,
+) -> dict[str, Any]:
+    """Draw PA S/R + structure label, EW lines, optional position from plan."""
+    return _apply_scenario_to_chart(
+        scenario,
+        symbol=symbol,
+        timeframe=timeframe,
+        htf_timeframe=htf_timeframe,
+        ltf_timeframe=ltf_timeframe,
+        bar_times=bar_times,
+        ltf_times=ltf_times,
+        ltf_closes=ltf_closes,
+        ltf_highs=ltf_highs,
+        mtf=mtf,
+        plan=plan,
+        clear_drawings=clear_drawings,
+        draw_pa=draw_pa,
+        draw_position=draw_position,
+    )
+
+
+def run_trade_assistant(
+    symbol: str,
+    ltf_timeframe: str | None = None,
+    htf_timeframe: str | None = None,
+    market: str | None = None,
+    equity: float = 100_000.0,
+    risk_per_trade_pct: float | None = None,
+    min_risk_reward: float | None = None,
+    open_positions: list[dict[str, Any]] | None = None,
+    rules: dict[str, Any] | None = None,
+    journal_path: str | None = None,
+    draw_on_chart: bool = True,
+    log_journal: bool = True,
+    set_alerts: bool = False,
+) -> dict[str, Any]:
+    """Unified assistant: TV data + MTF plan + chart draw + journal (one MCP)."""
+    return _run_trade_assistant(
+        symbol=symbol,
+        ltf_timeframe=ltf_timeframe,
+        htf_timeframe=htf_timeframe,
+        market=market,
+        equity=float(equity),
+        risk_per_trade_pct=risk_per_trade_pct,
+        min_risk_reward=min_risk_reward,
+        open_positions=open_positions,
+        rules=rules,
+        journal_path=journal_path,
+        draw_on_chart=draw_on_chart,
+        log_journal=log_journal,
+        set_alerts=set_alerts,
+    )
+
+
+def tv_health_check() -> dict[str, Any]:
+    """TradingView CDP health (proxied — no second MCP in Cursor)."""
+    return _tv_health_check()
+
+
+def tv_fetch_mtf_ohlcv(
+    symbol: str,
+    ltf_timeframe: str,
+    htf_timeframe: str,
+    bars: int | None = None,
+    market: str | None = None,
+) -> dict[str, Any]:
+    """Pull LTF + HTF OHLCV from TradingView chart."""
+    return _tv_fetch_mtf_ohlcv(
+        symbol, ltf_timeframe, htf_timeframe, bars=bars, market=market,
+    )
+
+
+def tv_chart_set_symbol(symbol: str) -> dict[str, Any]:
+    return _tv_chart_set_symbol(symbol)
+
+
+def tv_chart_set_timeframe(timeframe: str) -> dict[str, Any]:
+    return _tv_chart_set_timeframe(timeframe)
+
+
+def tv_chart_get_state() -> dict[str, Any]:
+    return _tv_chart_get_state()
+
+
+def tv_data_get_ohlcv(count: int = 200, summary: bool = False) -> dict[str, Any]:
+    return _tv_data_get_ohlcv(count=int(count), summary=bool(summary))
+
+
+def tv_draw_clear() -> dict[str, Any]:
+    return _tv_draw_clear()
+
+
+def tv_alert_create(
+    price: float,
+    condition: str = "crossing",
+    message: str | None = None,
+) -> dict[str, Any]:
+    return _tv_alert_create(price, condition=condition, message=message)
+
+
+def tv_capture_screenshot(region: str = "chart") -> dict[str, Any]:
+    return _tv_capture_screenshot(region=region)
+
+
+def apply_trade_to_chart(
+    plan: dict[str, Any],
+    symbol: str | None = None,
+    timeframe: str | None = None,
+    clear_drawings: bool = True,
+    inject_pine: bool = False,
+    draw_levels: bool = True,
+) -> dict[str, Any]:
+    """Draw trade on chart via TradingView Long/Short position tool.
+
+    Requires TradingView Desktop with CDP (--remote-debugging-port=9222)
+    and tradingview-mcp CLI on TRADINGVIEW_MCP_PATH (default sibling folder).
+    """
+    if plan.get("error"):
+        return {"error": "invalid_plan", "detail": str(plan.get("detail", plan["error"]))}
+    trade_plan = _unwrap_trade_plan(plan)
+    if trade_plan.get("error") or trade_plan.get("entry") is None:
+        return {"error": "invalid_plan", "detail": "missing entry/stop in plan"}
+    try:
+        return {
+            "source": "bist-trader-mcp — apply_trade_to_chart",
+            **_apply_trade_plan_to_chart(
+                plan=trade_plan,
+                symbol=symbol,
+                timeframe=timeframe,
+                clear_drawings=clear_drawings,
+                inject_pine=inject_pine,
+                draw_levels=draw_levels,
+                render_pine=render_recipe,
+                pine_payload_fn=pine_payload_from_trade_plan,
+            ),
+        }
+    except Exception as e:
+        return {"error": "tv_bridge_failed", "detail": str(e)}

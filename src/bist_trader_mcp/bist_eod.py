@@ -53,10 +53,15 @@ async def fetch_eod_ohlcv(
     ticker: str,
     since: date | str | None = None,
     until: date | str | None = None,
+    period: str | None = None,
 ) -> list[OHLCVBar]:
     """Fetch daily OHLCV bars for a BIST symbol."""
-    since_date = _coerce(since) if since else date.today() - timedelta(days=365)
     until_date = _coerce(until) if until else date.today()
+    since_date = (
+        _coerce(since)
+        if since
+        else _period_start(until_date, period or "1y")
+    )
     if until_date <= since_date:
         raise SourceError("bist_eod", "until must be after since")
 
@@ -98,6 +103,9 @@ def _parse_yahoo_chart(payload: Any, ticker: str) -> list[OHLCVBar]:
 
     bars: list[OHLCVBar] = []
     for i, ts in enumerate(timestamps):
+        close = _safe_float(_at(closes, i))
+        if close is None:
+            continue
         try:
             bar_date = datetime.fromtimestamp(int(ts)).date().isoformat()
         except (OverflowError, OSError, ValueError):
@@ -108,7 +116,7 @@ def _parse_yahoo_chart(payload: Any, ticker: str) -> list[OHLCVBar]:
                 open=_safe_float(_at(opens, i)),
                 high=_safe_float(_at(highs, i)),
                 low=_safe_float(_at(lows, i)),
-                close=_safe_float(_at(closes, i)),
+                close=close,
                 volume=_safe_float(_at(volumes, i)),
                 ticker=ticker,
             )
@@ -139,3 +147,26 @@ def _coerce(value: date | str) -> date:
         except ValueError:
             continue
     raise SourceError("bist_eod", f"bad date: {value!r}")
+
+
+def _period_start(end: date, period: str) -> date:
+    value = period.strip().lower()
+    if value.endswith("mo"):
+        try:
+            months = int(value[:-2])
+        except ValueError as exc:
+            raise SourceError("bist_eod", f"bad period: {period!r}") from exc
+        return end - timedelta(days=max(1, months) * 31)
+    if value.endswith("y"):
+        try:
+            years = int(value[:-1])
+        except ValueError as exc:
+            raise SourceError("bist_eod", f"bad period: {period!r}") from exc
+        return end - timedelta(days=max(1, years) * 365)
+    if value.endswith("d"):
+        try:
+            days = int(value[:-1])
+        except ValueError as exc:
+            raise SourceError("bist_eod", f"bad period: {period!r}") from exc
+        return end - timedelta(days=max(1, days))
+    raise SourceError("bist_eod", f"unsupported period: {period!r}")
