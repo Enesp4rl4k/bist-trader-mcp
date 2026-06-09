@@ -538,7 +538,7 @@ def apply_pa_overlay_to_chart(
     for r in resistances:
         px = float(r["price"])
         line = tv_draw_horizontal_line(
-            t_anchor, px, text=f"R {px:.2f}", overrides=overrides_json(PA_RESIST_LINE)
+            t_anchor, px, overrides=overrides_json(PA_RESIST_LINE)
         )
         out["levels"].append(line)
         time.sleep(0.08)
@@ -546,7 +546,7 @@ def apply_pa_overlay_to_chart(
     for s in supports:
         px = float(s["price"])
         line = tv_draw_horizontal_line(
-            t_anchor, px, text=f"S {px:.2f}", overrides=overrides_json(PA_SUPPORT_LINE)
+            t_anchor, px, overrides=overrides_json(PA_SUPPORT_LINE)
         )
         out["levels"].append(line)
         time.sleep(0.08)
@@ -563,7 +563,7 @@ def apply_pa_overlay_to_chart(
         ):
             out["levels"].append(
                 tv_draw_horizontal_line(
-                    t_anchor, px, text=lbl, overrides=overrides_json(style)
+                    t_anchor, px, overrides=overrides_json(style)
                 )
             )
             time.sleep(0.06)
@@ -589,7 +589,7 @@ def apply_pa_overlay_to_chart(
         for px, lbl in ((top, f"{label} top"), (bot, f"{label} bot")):
             out["levels"].append(
                 tv_draw_horizontal_line(
-                    t_anchor, px, text=lbl, overrides=overrides_json(PA_FVG_LINE)
+                    t_anchor, px, overrides=overrides_json(PA_FVG_LINE)
                 )
             )
             time.sleep(0.06)
