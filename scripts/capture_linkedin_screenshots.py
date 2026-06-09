@@ -85,7 +85,6 @@ def demo_draw(
         tv_fetch_mtf_ohlcv,
         tv_finalize_chart_view,
         tv_read_chart_bars,
-        tv_set_visible_range,
     )
 
     # Apply basic overrides for clean visuals
@@ -182,7 +181,6 @@ def demo_draw(
         scroll_t = None
 
     tv_finalize_chart_view(sym_tv, ltf_tf, scroll_unix=scroll_t, wait_sec=2.5)
-    tv_set_visible_range(bars=80, offset=15)
 
     return {
         "symbol": symbol,
