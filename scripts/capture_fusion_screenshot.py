@@ -107,14 +107,14 @@ html_content = """
         <div class="header">⚡ bist-trader-mcp: Fusion Report (BIST:ASELS)</div>
         
         <div class="section-title">[FINANCIALS & VALUATION (borsa-mcp)]</div>
-        <div class="metric-row"><span>P/B (PD/DD)</span><span class="metric-val">6.0x</span></div>
-        <div class="metric-row"><span>EV/EBITDA (FD/FAVÖK)</span><span class="metric-val">31.5x</span></div>
+        <div class="metric-row"><span>P/B Ratio</span><span class="metric-val">6.0x</span></div>
+        <div class="metric-row"><span>EV/EBITDA</span><span class="metric-val">31.5x</span></div>
         <div class="metric-row"><span>EV/Sales</span><span class="metric-val">8.56x</span></div>
         <div class="metric-row"><span>Owner Earnings</span><span class="metric-val-bad">-6,124.69M TL (Negative)</span></div>
         <div class="metric-row"><span>Buffett Analysis Score</span><span class="metric-val-bad">AVOID</span></div>
 
         <div class="section-title">[FUNDAMENTAL & MACRO CONTEXT]</div>
-        <div class="list-item"><span class="badge-mcp">borsa-mcp</span><b>Warning:</b> "Şirket sürdürülebilir nakit akışı üretmiyor" (Company does not generate sustainable cash flow). Quality of earnings is deeply negative despite high net income.</div>
+        <div class="list-item"><span class="badge-mcp">borsa-mcp</span><b>Warning:</b> "Company does not generate sustainable cash flow." Quality of earnings is deeply negative despite high net income.</div>
         <div class="list-item"><span class="badge">KAP</span><b>Contract Flow:</b> Huge recent contracts mask the underlying cash collection issues.</div>
         <div class="score" style="color: #f48771;">=> Fundamental Score: 32/100 (Negative Bias)</div>
 
