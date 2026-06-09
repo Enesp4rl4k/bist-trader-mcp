@@ -98,17 +98,7 @@ MCP server for Turkish financial markets and global assets. Combines public data
 
 > *Gather financial data → Analyze with Claude → Scenario + position box on TradingView.*
 
-## Positioning
 
-| Project | Scope | Relationship |
-|---|---|---|
-| [`saidsurucu/borsa-mcp`](https://github.com/saidsurucu/borsa-mcp) | BIST equity fundamentals + TEFAS + crypto + forex | Complementary (equity ≠ rates/derivatives/macro) |
-| [`orhoncan/evds-mcp`](https://github.com/orhoncan/evds-mcp) | CBRT EVDS generic series search / download / analysis | Generic EVDS layer; we provide curated rates + Pine recipes |
-| [Fintables Evo MCP](https://fintables.com/evo/mcp) | Commercial, deepened fundamentals | Different layer |
-| [`tradesdontlie/tradingview-mcp`](https://github.com/tradesdontlie/tradingview-mcp) | TradingView Desktop control | Used together (action layer) |
-| **bist-trader-mcp (this repo)** | TR macro + fixed income + derivatives + KAP + MKK + Pine recipe | TR-data + cross-asset analysis |
-
-In one sentence: **"Gather financial data, analyze with Claude, push the result to TradingView as a Pine recipe."**
 
 ## Layers
 
