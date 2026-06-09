@@ -82,10 +82,15 @@ def demo_draw(
     from bist_trader_mcp.market_profiles import resolve_assistant_config
     from bist_trader_mcp.tv_bridge import apply_scenario_to_chart, build_demo_position_plan
     from bist_trader_mcp.tv_tools import (
+        tv_apply_overrides,
         tv_fetch_mtf_ohlcv,
         tv_finalize_chart_view,
         tv_read_chart_bars,
+        tv_set_visible_range,
     )
+
+    # Apply basic overrides for clean visuals
+    tv_apply_overrides(chart_style)
 
     cfg = resolve_assistant_config(symbol, market=market)
     sym_tv = cfg["symbol_tv"]
@@ -179,6 +184,7 @@ def demo_draw(
         scroll_t = None
 
     tv_finalize_chart_view(sym_tv, ltf_tf, scroll_unix=scroll_t, wait_sec=2.5)
+    tv_set_visible_range(bars=80, offset=15)
 
     return {
         "symbol": symbol,
