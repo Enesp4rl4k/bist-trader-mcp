@@ -618,9 +618,10 @@ def apply_pa_overlay_to_chart(
             f"PA · HTF {mtf.get('htf_structure')} · LTF {mtf.get('ltf_structure')} "
             f"· {mtf.get('trade_quality')} · {mtf.get('aligned_direction')}{fvg_note}"
         )
-    out["labels"].append(
-        tv_draw_text(t_anchor, banner_y, banner, overrides=overrides_json(PA_BANNER_TEXT))
-    )
+    # Disabled text banner rendering to prevent UI clutter and overlapping text in screenshots
+    # out["labels"].append(
+    #     tv_draw_text(t_anchor, banner_y, banner, overrides=overrides_json(PA_BANNER_TEXT))
+    # )
     out["banner"] = banner
     return out
 

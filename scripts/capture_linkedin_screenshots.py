@@ -227,7 +227,7 @@ def main() -> int:
         # Slide 1: Hero PA
         {
             "symbol": "ASELS", "market": "bist", "shot_name": "linkedin_bist_asels", "out_path": OUT / "linkedin-bist-asels.png",
-            "draw_pa": True, "draw_ew": False, "draw_position": True, "chart_style": "clean"
+            "draw_pa": True, "draw_ew": False, "draw_position": False, "chart_style": "clean"
         },
         # Slide 2: Cross-market EW
         {
@@ -242,7 +242,7 @@ def main() -> int:
         # Slide 4: Elliott Detail
         {
             "symbol": "ASELS", "market": "bist", "shot_name": "linkedin_bist_elliott", "out_path": OUT / "linkedin-bist-elliott.png",
-            "draw_pa": False, "draw_ew": True, "draw_position": True, "chart_style": "clean"
+            "draw_pa": False, "draw_ew": True, "draw_position": False, "chart_style": "clean"
         },
     ]
 
