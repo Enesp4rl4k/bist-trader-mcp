@@ -505,6 +505,9 @@ def analyze_elliott_wave(
 
     atr_series = atr(highs, lows, closes, 14)
     atr_val = next((v for v in reversed(atr_series) if v is not None), None)
+    # Current-state prominence floor. Note: this uses the latest ATR for the
+    # whole series, so it is a present-time view, not a bar-by-bar backtest
+    # signal. Swing detection itself is causal (see tests/test_lookahead.py).
     prom = round(atr_val * 0.5, 8) if atr_val else None
     pivots = build_zigzag_pivots(
         highs, lows, swing_lookback=swing_lookback, min_prominence=prom
