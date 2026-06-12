@@ -59,7 +59,31 @@ def fuse_fundamental_technical(
     warnings: list[str] = []
 
     tech_score = float(conf.get("score") or 0)
-    fusion_raw = tech_score * 0.72 + (fund_score + 50) * 0.28
+    
+    # Dynamic weighting of technical vs fundamental scores
+    tech_weight = 0.72
+    fund_weight = 0.28
+    
+    plan = trade_result.get("plan") or {}
+    setup = technical.get("mtf", {}).get("recommended_setup") or {}
+    entry = plan.get("entry") or setup.get("entry")
+    stop = plan.get("stop") or setup.get("stop")
+    if entry and stop and entry > 0:
+        stop_dist = abs(entry - stop) / entry
+        if stop_dist > 0.04:
+            tech_weight = 0.80
+            fund_weight = 0.20
+        elif stop_dist < 0.015:
+            tech_weight = 0.60
+            fund_weight = 0.40
+            
+    fetched = (fund_enrich or {}).get("fetched") or {}
+    is_crypto = "funding" in fetched or "fear_greed" in fetched
+    if is_crypto:
+        tech_weight = 0.65
+        fund_weight = 0.35
+        
+    fusion_raw = tech_score * tech_weight + (fund_score + 50) * fund_weight
 
     if not tech_candidate:
         warnings.append("technical_not_trade_candidate")
@@ -117,17 +141,42 @@ def fuse_fundamental_technical(
         warnings.append("data_quality_thin")
         fusion_raw -= 5
 
+    # Minor warnings position size scaling
+    position_scale_factor = 1.0
+    minor_warnings_penalties = {
+        "elevated_positive_funding": 0.15,
+        "kap_negative_vs_long": 0.25,
+        "sector_underperform_vs_long": 0.20,
+        "sector_outperform_vs_short": 0.20,
+        "weak_fundamentals_vs_long": 0.25,
+        "strong_fundamentals_vs_short": 0.20,
+        "data_quality_thin": 0.10,
+    }
+    for w in warnings:
+        if w in minor_warnings_penalties:
+            position_scale_factor -= minor_warnings_penalties[w]
+    position_scale_factor = round(max(0.40, position_scale_factor), 2)
+    
+    min_fusion_score = 52.0
+    if position_scale_factor < 1.0:
+        min_fusion_score = 48.0  # allow trade with reduced size/risk
+        
     fusion_score = round(max(0.0, min(100.0, fusion_raw)), 1)
     trade_allowed = (
         tech_approved
         and tech_candidate
-        and fusion_score >= 52
+        and fusion_score >= min_fusion_score
         and "crowded_long_funding" not in warnings
         and "mtf_conflict" not in warnings
+        and "elliott_htf_ltf_conflict" not in warnings
         and "tv_symbol_mismatch" not in warnings
     )
 
-    if tech_approved and not trade_allowed and "crowded_long_funding" in warnings:
+    if tech_approved and not trade_allowed and "mtf_conflict" in warnings:
+        block_reason = "fusion_mtf_conflict"
+    elif tech_approved and not trade_allowed and "elliott_htf_ltf_conflict" in warnings:
+        block_reason = "fusion_elliott_conflict"
+    elif tech_approved and not trade_allowed and "crowded_long_funding" in warnings:
         block_reason = "fusion_crowded_funding"
     elif tech_approved and not trade_allowed:
         block_reason = "fusion_score_low"
@@ -153,6 +202,9 @@ def fuse_fundamental_technical(
         f"temel {fund_score:+.0f}{ratio_note} | yön {direction} | "
         f"{'uyumlu' if aligned else 'kısmi'} | işlem={'evet' if trade_allowed else 'hayır'}"
     )
+    if position_scale_factor < 1.0:
+        summary_tr += f" (risk ölçeği {position_scale_factor}x)"
+        
     if warnings_tr:
         summary_tr += " | uyarı: " + ", ".join(warnings_tr[:4])
 
@@ -170,6 +222,9 @@ def fuse_fundamental_technical(
         "trade_allowed": trade_allowed,
         "block_reason": block_reason,
         "summary_tr": summary_tr,
+        "position_scale_factor": position_scale_factor,
+        "tech_weight": tech_weight,
+        "fund_weight": fund_weight,
     }
 
 

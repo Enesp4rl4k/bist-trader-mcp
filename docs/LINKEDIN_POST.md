@@ -25,10 +25,12 @@ The system pulls public API data in the background:
 • **KAP & MKK:** Company disclosures, material events, and foreign ownership ratios.
 • **Crypto:** Binance funding rates and open interest.
 
-**3️⃣ The AI Fusion Gate**
-This is where the LLM shines. Instead of doing the math, the LLM acts as the Chief Risk Officer. It takes the deterministic Technical Report and the Fundamental Context and passes them through a "Fusion Gate." 
-• If PA is bullish but Elliott Wave is bearish, the system flags a **Conflict** and blocks the trade.
-• If everything aligns, it generates a full TradingView Pine Script recipe and draws the Long/Short position tool directly on your TradingView Desktop.
+**3️⃣ The Deterministic Fusion Gate**
+The trade decision itself is also pure Python—not the LLM. A deterministic Fusion Gate scores agreement between the Technical Report and the Fundamental Context and applies hard block rules:
+• If there's a multi-timeframe disagreement, an Elliott HTF/LTF conflict, crowded funding, or a symbol mismatch, the trade is **blocked**.
+• If everything aligns and the fusion score clears the threshold, it generates a full TradingView Pine Script recipe and draws the Long/Short position tool directly on your TradingView Desktop.
+
+So where does the LLM fit? **Orchestration, not decisions.** It turns a natural language prompt into the right tool calls and explains the deterministic verdict in plain language. It never touches the math, and it never overrides the gate.
 
 **🖼️ What the screenshots show:**
 1. **BIST:ASELS:** The system detected a structural conflict between PA and Elliott. It blocked the trade (no forced position box), proving its strict risk management.

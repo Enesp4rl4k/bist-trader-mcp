@@ -1,6 +1,6 @@
 from bist_trader_mcp.elliott_projections import project_impulse_bull
 from bist_trader_mcp.elliott_wave import Pivot, analyze_elliott_wave  # noqa: E402
-from tests.test_elliott_wave import _synthetic_bull_impulse_bars
+from tests.test_elliott_wave import _synthetic_clean_bull_impulse_bars
 
 
 def test_wave5_projection_from_wave4():
@@ -19,10 +19,11 @@ def test_wave5_projection_from_wave4():
 
 
 def test_analyze_includes_forecast():
-    c, h, l = _synthetic_bull_impulse_bars(100)
+    c, h, l = _synthetic_clean_bull_impulse_bars()
     out = analyze_elliott_wave(c, h, l, swing_lookback=3)
     primary = out.get("primary")
     assert primary is not None
+    assert primary.get("valid") is True
     assert primary.get("forecast") is not None
     assert primary.get("forecast_summary")
     assert primary.get("projected_points")

@@ -67,6 +67,26 @@ def _fib_ratio(a: float, b: float, c: float) -> float | None:
     return abs(c - b) / abs(span)
 
 
+# The three inviolable Elliott impulse rules. A count breaking any of these is
+# not a valid impulse and is hard-rejected (score 0), not merely penalised.
+def _impulse_hard_violations(
+    *,
+    wave2_breaks_origin: bool,
+    wave4_overlaps_wave1: bool,
+    wave3_shortest: bool | None,
+) -> list[str]:
+    """Return hard-rule violations. ``wave3_shortest`` is None for forming
+    counts (wave 5 not yet printed) where the rule cannot be evaluated yet."""
+    v: list[str] = []
+    if wave2_breaks_origin:
+        v.append("wave2_breaks_wave1_origin")
+    if wave3_shortest:
+        v.append("wave3_is_shortest")
+    if wave4_overlaps_wave1:
+        v.append("wave4_overlaps_wave1")
+    return v
+
+
 def _score_impulse_bull(p: list[Pivot]) -> tuple[float, dict[str, Any]]:
     """Six pivots L0 H1 L2 H3 L4 H5 — bullish impulse labeling."""
     if len(p) < 6:
@@ -84,26 +104,18 @@ def _score_impulse_bull(p: list[Pivot]) -> tuple[float, dict[str, Any]]:
 
     l0, h1, l2, h3, l4, h5 = [x.price for x in seg]
     w1 = h1 - l0
-    w2 = h1 - l2
     w3 = h3 - l2
-    w4 = h3 - l4
     w5 = h5 - l4
-    score = 50.0
-    violations: list[str] = []
 
-    if l2 <= l0:
-        score -= 25
-        violations.append("wave2_below_wave0")
-    if w3 <= 0 or (w1 > 0 and w3 <= min(w1, w5) * 0.85):
-        score -= 20
-        violations.append("wave3_shortest_or_flat")
-    if l4 <= h1:
-        score -= 15
-        violations.append("wave4_overlaps_wave1")
+    hard = _impulse_hard_violations(
+        wave2_breaks_origin=(l2 <= l0),
+        wave4_overlaps_wave1=(l4 <= h1),
+        wave3_shortest=(w5 > 0 and w3 < w1 and w3 < w5),
+    )
     if w5 <= 0:
-        score -= 20
-        violations.append("wave5_incomplete")
+        hard.append("wave5_nonpositive")
 
+    score = 50.0
     retr2 = _fib_ratio(l0, h1, l2)
     retr4 = _fib_ratio(l2, h3, l4)
     fib_notes: dict[str, Any] = {}
@@ -130,12 +142,16 @@ def _score_impulse_bull(p: list[Pivot]) -> tuple[float, dict[str, Any]]:
         "degree": "impulse",
         "labels": labels,
         "points": points,
-        "violations": violations,
+        "violations": hard,
+        "hard_violations": hard,
+        "valid": not hard,
         "fib": fib_notes,
         "invalidation_price": round(invalidation, 8),
         "extension_target": round(target_ext, 8),
         "current_wave": "5_complete_or_extended" if w5 > 0 else "forming_5",
     }
+    if hard:
+        return 0.0, detail
     return min(100.0, max(0.0, score)), detail
 
 
@@ -156,13 +172,14 @@ def _score_impulse_bull_forming(p: list[Pivot]) -> tuple[float, dict[str, Any]]:
     l0, h1, l2, h3, l4 = [x.price for x in seg]
     w1 = h1 - l0
     w3 = h3 - l2
+    hard = _impulse_hard_violations(
+        wave2_breaks_origin=(l2 <= l0),
+        wave4_overlaps_wave1=(l4 <= h1),
+        wave3_shortest=None,  # wave 5 not printed yet
+    )
     score = 46.0
-    if l2 <= l0:
-        score -= 16
-    if l4 <= h1:
-        score -= 12
     if w3 <= 0 or (w1 > 0 and w3 < w1 * 0.9):
-        score -= 10  # wave 3 should not be the weakest impulse leg
+        score -= 10  # wave 3 should not be the weakest impulse leg (soft until w5 prints)
     retr2 = _fib_ratio(l0, h1, l2)
     if retr2 is not None and 0.382 <= retr2 <= 0.618:
         score += 6
@@ -179,9 +196,14 @@ def _score_impulse_bull_forming(p: list[Pivot]) -> tuple[float, dict[str, Any]]:
         "degree": "impulse",
         "labels": ["(0)", "(1)", "(2)", "(3)", "(4)"],
         "points": points,
+        "violations": hard,
+        "hard_violations": hard,
+        "valid": not hard,
         "invalidation_price": round(l0, 8),
         "current_wave": "forming_5",
     }
+    if hard:
+        return 0.0, detail
     return min(100.0, max(0.0, score)), detail
 
 
@@ -201,11 +223,12 @@ def _score_impulse_bear_forming(p: list[Pivot]) -> tuple[float, dict[str, Any]]:
     h0, l1, h2, l3, h4 = [x.price for x in seg]
     w1 = h0 - l1
     w3 = h2 - l3
+    hard = _impulse_hard_violations(
+        wave2_breaks_origin=(h2 >= h0),
+        wave4_overlaps_wave1=(h4 >= l1),
+        wave3_shortest=None,  # wave 5 not printed yet
+    )
     score = 46.0
-    if h2 >= h0:
-        score -= 16
-    if h4 >= l1:
-        score -= 12
     if w3 <= 0 or (w1 > 0 and w3 < w1 * 0.9):
         score -= 10
     retr2 = _fib_ratio(h0, l1, h2)
@@ -224,9 +247,14 @@ def _score_impulse_bear_forming(p: list[Pivot]) -> tuple[float, dict[str, Any]]:
         "degree": "impulse",
         "labels": ["(0)", "(1)", "(2)", "(3)", "(4)"],
         "points": points,
+        "violations": hard,
+        "hard_violations": hard,
+        "valid": not hard,
         "invalidation_price": round(h0, 8),
         "current_wave": "forming_5",
     }
+    if hard:
+        return 0.0, detail
     return min(100.0, max(0.0, score)), detail
 
 
@@ -246,26 +274,18 @@ def _score_impulse_bear(p: list[Pivot]) -> tuple[float, dict[str, Any]]:
 
     h0, l1, h2, l3, h4, l5_end = [x.price for x in seg]
     w1 = h0 - l1
-    w2 = h2 - l1
     w3 = h2 - l3
-    w4 = h4 - l3
     w5 = h4 - l5_end
-    score = 50.0
-    violations: list[str] = []
 
-    if h2 >= h0:
-        score -= 25
-        violations.append("wave2_above_wave0")
-    if w3 <= 0 or (w1 > 0 and w3 <= min(w1, w5) * 0.85):
-        score -= 20
-        violations.append("wave3_shortest_or_flat")
-    if h4 >= l1:
-        score -= 15
-        violations.append("wave4_overlaps_wave1")
+    hard = _impulse_hard_violations(
+        wave2_breaks_origin=(h2 >= h0),
+        wave4_overlaps_wave1=(h4 >= l1),
+        wave3_shortest=(w5 > 0 and w3 < w1 and w3 < w5),
+    )
     if w5 <= 0:
-        score -= 20
-        violations.append("wave5_incomplete")
+        hard.append("wave5_nonpositive")
 
+    score = 50.0
     retr2 = _fib_ratio(h0, l1, h2)
     retr4 = _fib_ratio(h2, l3, h4)
     fib_notes: dict[str, Any] = {}
@@ -292,12 +312,16 @@ def _score_impulse_bear(p: list[Pivot]) -> tuple[float, dict[str, Any]]:
         "degree": "impulse",
         "labels": labels,
         "points": points,
-        "violations": violations,
+        "violations": hard,
+        "hard_violations": hard,
+        "valid": not hard,
         "fib": fib_notes,
         "invalidation_price": round(invalidation, 8),
         "extension_target": round(target_ext, 8),
         "current_wave": "5_complete_or_extended" if w5 > 0 else "forming_5",
     }
+    if hard:
+        return 0.0, detail
     return min(100.0, max(0.0, score)), detail
 
 
@@ -422,6 +446,7 @@ def analyze_elliott_wave(
     pivots = build_zigzag_pivots(highs, lows, swing_lookback=swing_lookback)
     last_bar_index = len(closes) - 1
     candidates: list[dict[str, Any]] = []
+    rejected_counts: list[dict[str, Any]] = []
 
     for scorer, name in (
         (_score_impulse_bull, "impulse_bull"),
@@ -432,6 +457,12 @@ def analyze_elliott_wave(
         (_score_abc_bear, "abc_bear"),
     ):
         score, detail = scorer(pivots)
+        if detail.get("hard_violations"):
+            # Hard Elliott rule broken — not a valid count, never surfaced.
+            rejected_counts.append(
+                {"name": name, "hard_violations": detail["hard_violations"]}
+            )
+            continue
         if score > 0 and "error" not in detail:
             kind = name.replace("_forming", "")
             if kind.startswith("impulse"):
@@ -488,6 +519,7 @@ def analyze_elliott_wave(
             for p in pivots[-12:]
         ],
         "hypotheses": candidates,
+        "rejected_counts": rejected_counts,
         "primary": primary,
         "alternate": alternate,
         "bias": bias,
@@ -502,8 +534,11 @@ def analyze_elliott_wave(
         "fib_grades": (primary or {}).get("fib_grades"),
         "channel": (primary or {}).get("channel"),
         "notes": (
-            "Scores are rule-based; alternate count may be equally valid. "
-            "Use with PA/MTF — never trade on EW alone. See detail.report_tr."
+            "Hard Elliott rules (wave 2 cannot break wave 1 origin, wave 3 cannot "
+            "be the shortest, wave 4 cannot overlap wave 1) are enforced — counts "
+            "breaking them are hard-rejected, see rejected_counts. Remaining scores "
+            "are rule-based; alternate count may be equally valid. Use with PA/MTF — "
+            "never trade on EW alone. See detail.report_tr."
         ),
     }
 
