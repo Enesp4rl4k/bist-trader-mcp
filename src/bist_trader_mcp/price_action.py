@@ -26,24 +26,63 @@ def find_swings(
     highs: list[float],
     lows: list[float],
     lookback: int = 5,
+    *,
+    min_prominence: float | None = None,
 ) -> tuple[list[SwingPoint], list[SwingPoint]]:
-    """Fractal swing highs/lows: extrema within ±lookback bars."""
+    """Fractal swing highs/lows: extrema within ±lookback bars.
+
+    When ``min_prominence`` is given, a swing must stand out from the deepest
+    counter-extreme inside its window by at least that amount (price units).
+    This drops micro-swings in choppy ranges. Default (None) preserves the
+    original fractal behaviour.
+    """
     if lookback <= 0:
         raise ValueError("lookback must be > 0")
     n = min(len(highs), len(lows))
     if n == 0:
         return [], []
 
+    prom = min_prominence if (min_prominence and min_prominence > 0) else None
     swing_highs: list[SwingPoint] = []
     swing_lows: list[SwingPoint] = []
     for i in range(lookback, n - lookback):
         window_h = highs[i - lookback : i + lookback + 1]
         window_l = lows[i - lookback : i + lookback + 1]
         if highs[i] == max(window_h):
-            swing_highs.append(SwingPoint(index=i, price=highs[i], kind="high"))
+            if prom is None or highs[i] - min(window_l) >= prom:
+                swing_highs.append(SwingPoint(index=i, price=highs[i], kind="high"))
         if lows[i] == min(window_l):
-            swing_lows.append(SwingPoint(index=i, price=lows[i], kind="low"))
+            if prom is None or max(window_h) - lows[i] >= prom:
+                swing_lows.append(SwingPoint(index=i, price=lows[i], kind="low"))
     return swing_highs, swing_lows
+
+
+def adaptive_swing_params(
+    atr_val: float | None,
+    price: float,
+    *,
+    base_lookback: int = 5,
+    n_bars: int | None = None,
+) -> tuple[int, float | None]:
+    """Derive (lookback, min_prominence) from volatility.
+
+    Higher ATR-to-price ratio widens the lookback (so noisy/volatile regimes
+    need a bigger move to mark a swing) and sets a prominence floor of ~0.5×ATR.
+    Returns the base lookback and no prominence when ATR is unknown.
+    """
+    if not atr_val or not price or price <= 0:
+        return base_lookback, None
+    atr_pct = atr_val / price
+    if atr_pct >= 0.04:
+        lookback = base_lookback + 2
+    elif atr_pct >= 0.02:
+        lookback = base_lookback + 1
+    else:
+        lookback = base_lookback
+    if n_bars is not None:
+        # never let lookback eat the series (need 2*lookback+1 bars)
+        lookback = max(2, min(lookback, (n_bars - 1) // 2))
+    return lookback, round(atr_val * 0.5, 8)
 
 
 def _compare_sequence(values: list[float]) -> str:
@@ -65,8 +104,10 @@ def infer_market_structure(
     closes: list[float] | None = None,
     highs: list[float] | None = None,
     lows: list[float] | None = None,
+    opens: list[float] | None = None,
+    atr_val: float | None = None,
 ) -> dict[str, Any]:
-    """Classify HH/HL/LH/LL, BOS/CHoCH; bar fallback when swings are sparse."""
+    """Classify HH/HL/LH/LL, BOS/CHoCH/MSS; bar fallback when swings are sparse."""
     from .pa_structure import infer_market_structure_enhanced
 
     return infer_market_structure_enhanced(
@@ -75,6 +116,8 @@ def infer_market_structure(
         closes=closes,
         highs=highs,
         lows=lows,
+        opens=opens,
+        atr_val=atr_val,
     )
 
 
@@ -201,12 +244,14 @@ def analyze_price_action(
     highs: list[float],
     lows: list[float],
     *,
+    opens: list[float] | None = None,
     volumes: list[float] | None = None,
     swing_lookback: int = 5,
     sr_tolerance_pct: float = 0.003,
     stop_buffer_pct: float = 0.001,
     max_entry_chase_atr: float = 1.5,
     min_confluence: float = 40.0,
+    adaptive_swings: bool = True,
 ) -> dict[str, Any]:
     """Full PA panel: swings, structure, S/R, bias, suggested setups."""
     if not (len(closes) == len(highs) == len(lows)):
@@ -214,14 +259,30 @@ def analyze_price_action(
     if len(closes) < swing_lookback * 2 + 1:
         raise ValueError("need more bars for swing detection")
 
-    swing_highs, swing_lows = find_swings(highs, lows, lookback=swing_lookback)
+    if opens is None:
+        opens = [closes[0]] + closes[:-1]
+
     close = closes[-1]
 
     atr_series = atr(highs, lows, closes, 14)
     atr_val = next((v for v in reversed(atr_series) if v is not None), None)
 
+    swing_lb = swing_lookback
+    swing_prom: float | None = None
+    if adaptive_swings:
+        swing_lb, swing_prom = adaptive_swing_params(
+            atr_val, close, base_lookback=swing_lookback, n_bars=len(closes)
+        )
+    swing_highs, swing_lows = find_swings(
+        highs, lows, lookback=swing_lb, min_prominence=swing_prom
+    )
+    # Volatility-adaptive detection can over-filter; fall back to plain fractals
+    # if the prominence floor leaves us with too little structure to work with.
+    if adaptive_swings and (len(swing_highs) < 2 or len(swing_lows) < 2):
+        swing_highs, swing_lows = find_swings(highs, lows, lookback=swing_lookback)
+
     structure_info = infer_market_structure(
-        swing_highs, swing_lows, closes=closes, highs=highs, lows=lows
+        swing_highs, swing_lows, closes=closes, highs=highs, lows=lows, opens=opens, atr_val=atr_val
     )
     structure = structure_info["structure"]
 
@@ -258,13 +319,20 @@ def analyze_price_action(
     )
     fvg_panel = imbalance_panel
 
+    from .pa_blocks import build_block_panel
+    block_panel = build_block_panel(highs, lows, closes, opens, atr_val=atr_val)
+
     range_ctx = {
         "box": box,
         "recommended_play": range_panel.get("recommended_play"),
         "sweep": range_panel.get("sweep"),
+        "deviation": range_panel.get("deviation"),
         "liquidity_pools": range_panel.get("liquidity_pools"),
         "stacks": imbalance_panel.get("stacks"),
         "range_aligned": imbalance_panel.get("range_aligned"),
+        "structure_events": structure_info.get("structure_events"),
+        "swing_leg": structure_info.get("swing_leg"),
+        "sweeps": structure_info.get("sweeps"),
     }
 
     all_highs = [s.price for s in swing_highs]
@@ -311,6 +379,7 @@ def analyze_price_action(
         structure_events=structure_info.get("structure_events"),
         range_ctx=range_ctx,
         indicator_signals=indicator_signals,
+        block_ctx=block_panel,
     )
     conf_short = score_confluence(
         direction="short",
@@ -324,6 +393,7 @@ def analyze_price_action(
         structure_events=structure_info.get("structure_events"),
         range_ctx=range_ctx,
         indicator_signals=indicator_signals,
+        block_ctx=block_panel,
     )
 
     long_setup = pick_best_setup(
@@ -342,6 +412,7 @@ def analyze_price_action(
             max_entry_chase_atr=max_entry_chase_atr,
             fvg_objs=fvg_objs,
             range_ctx=range_ctx,
+            block_ctx=block_panel,
         ),
         conf_long,
         min_confluence=min_confluence,
@@ -362,6 +433,7 @@ def analyze_price_action(
             max_entry_chase_atr=max_entry_chase_atr,
             fvg_objs=fvg_objs,
             range_ctx=range_ctx,
+            block_ctx=block_panel,
         ),
         conf_short,
         min_confluence=min_confluence,
@@ -390,6 +462,12 @@ def analyze_price_action(
         "imbalances": fvg_panel,
         "range": range_panel,
         "range_trade": range_panel.get("recommended_play"),
+        "order_blocks": block_panel["order_blocks"],
+        "breaker_blocks": block_panel["breaker_blocks"],
+        "raw_obs": block_panel["raw_obs"],
+        "raw_breakers": block_panel["raw_breakers"],
+        "swing_leg": structure_info.get("swing_leg"),
+        "sweeps": structure_info.get("sweeps"),
         "structure_events": structure_info.get("structure_events") or [],
         "bias_strength": structure_info.get("bias_strength"),
         "indicator_signals": indicator_signals,
@@ -399,6 +477,7 @@ def analyze_price_action(
 __all__ = [
     "SwingPoint",
     "find_swings",
+    "adaptive_swing_params",
     "infer_market_structure",
     "cluster_levels",
     "analyze_price_action",
