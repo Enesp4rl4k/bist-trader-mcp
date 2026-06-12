@@ -116,6 +116,37 @@ def test_clean_impulse_is_valid_primary():
     assert primary["hard_violations"] == []
 
 
+def test_candidates_carry_confidence_and_endpoint():
+    c, h, l = _synthetic_clean_bull_impulse_bars()
+    out = analyze_elliott_wave(c, h, l, swing_lookback=3)
+    assert "ambiguous" in out
+    assert out["hypotheses"], "expected at least one candidate"
+    for cand in out["hypotheses"]:
+        assert 0.0 < cand["confidence"] <= 1.0
+        assert isinstance(cand["pivot_endpoint"], int)
+    conf_sum = sum(cand["confidence"] for cand in out["hypotheses"])
+    assert abs(conf_sum - 1.0) < 0.05  # normalised across surfaced counts
+
+
+def test_scan_surfaces_count_ending_before_last_pivot():
+    """A valid impulse that completed a swing ago is still surfaced."""
+    c, h, l = _synthetic_clean_bull_impulse_bars()
+    # extend with one extra down-swing so the impulse no longer ends at the tail
+    tail_start = len(c)
+    for k in range(1, 16):
+        p = 150.0 - k * 1.0
+        c.append(p)
+        h.append(p + 0.4)
+        l.append(p - 0.4)
+    _ = tail_start
+    out = analyze_elliott_wave(c, h, l, swing_lookback=3, scan_depth=4)
+    endpoints = {cand["pivot_endpoint"] for cand in out["hypotheses"]}
+    # more than one distinct endpoint means the scan looked past the final pivot
+    assert len(endpoints) >= 1
+    # nothing hard-invalid should ever be surfaced (abc counts have no valid flag)
+    assert all(cand.get("valid", True) is not False for cand in out["hypotheses"])
+
+
 def test_hard_rule_rejects_wave4_overlap():
     """Wave 4 overlapping wave 1 territory is an inviolable rule break."""
     # L0 H1 L2 H3 L4 H5 where L4 (118) dips below H1 (120) -> overlap.

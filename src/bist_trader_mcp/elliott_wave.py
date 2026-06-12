@@ -11,6 +11,7 @@ from typing import Any, Literal
 
 from .elliott_projections import attach_projection_to_hypothesis
 from .price_action import SwingPoint, find_swings
+from .technicals import atr
 
 WaveKind = Literal["impulse_bull", "impulse_bear", "abc_bull", "abc_bear", "unclear"]
 Direction = Literal["long", "short", "neutral"]
@@ -54,8 +55,11 @@ def build_zigzag_pivots(
     lows: list[float],
     *,
     swing_lookback: int = 5,
+    min_prominence: float | None = None,
 ) -> list[Pivot]:
-    swing_highs, swing_lows = find_swings(highs, lows, lookback=swing_lookback)
+    swing_highs, swing_lows = find_swings(
+        highs, lows, lookback=swing_lookback, min_prominence=min_prominence
+    )
     return _merge_alternating_pivots(swing_highs, swing_lows)
 
 
@@ -428,6 +432,55 @@ def _select_primary_alternate_hypotheses(
     return candidates[0], candidates[1] if len(candidates) > 1 else None
 
 
+_SCORERS = (
+    (_score_impulse_bull, "impulse_bull"),
+    (_score_impulse_bear, "impulse_bear"),
+    (_score_impulse_bull_forming, "impulse_bull_forming"),
+    (_score_impulse_bear_forming, "impulse_bear_forming"),
+    (_score_abc_bull, "abc_bull"),
+    (_score_abc_bear, "abc_bear"),
+)
+
+
+def _score_all_on(
+    pivots: list[Pivot],
+    *,
+    last_bar_index: int,
+    times: list[int] | None,
+    endpoint: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Run every scorer on one pivot window. ``endpoint`` is the index of the
+    last pivot in this window (the bar the count terminates on)."""
+    rows: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
+    for scorer, name in _SCORERS:
+        score, detail = scorer(pivots)
+        if detail.get("hard_violations"):
+            rejected.append({"name": name, "hard_violations": detail["hard_violations"]})
+            continue
+        if score <= 0 or "error" in detail:
+            continue
+        kind = name.replace("_forming", "")
+        if kind.startswith("impulse"):
+            seg = pivots[-6:] if len(pivots) >= 6 else pivots[-5:]
+        else:
+            seg = pivots[-4:]
+        detail = attach_projection_to_hypothesis(
+            detail, seg, kind=kind, bars_ahead=15,
+            last_bar_index=last_bar_index, times=times,
+        )
+        row = {"name": name, "score": round(score, 2), "pivot_endpoint": endpoint, **detail}
+        for pt_list in (row.get("points"), row.get("projected_points")):
+            if not pt_list or not times:
+                continue
+            for pt in pt_list:
+                idx = pt.get("index")
+                if idx is not None and 0 <= int(idx) < len(times):
+                    pt["time"] = int(times[int(idx)])
+        rows.append(row)
+    return rows, rejected
+
+
 def analyze_elliott_wave(
     closes: list[float],
     highs: list[float],
@@ -435,59 +488,66 @@ def analyze_elliott_wave(
     *,
     times: list[int] | None = None,
     swing_lookback: int = 5,
+    scan_depth: int = 3,
 ) -> dict[str, Any]:
-    """Score EW hypotheses on one timeframe (typically HTF)."""
+    """Score EW hypotheses on one timeframe (typically HTF).
+
+    Pivots are prominence-filtered (volatility-aware) so noisy tails don't
+    swamp the count. Candidates are gathered across the last ``scan_depth``
+    pivot endpoints — not just the final pivot — so a clean count that ended a
+    swing or two ago is still surfaced as an alternative.
+    """
     if len(closes) < swing_lookback * 2 + 1:
         return {
             "error": "insufficient_bars",
             "detail": f"need at least {swing_lookback * 2 + 1} bars",
         }
 
-    pivots = build_zigzag_pivots(highs, lows, swing_lookback=swing_lookback)
+    atr_series = atr(highs, lows, closes, 14)
+    atr_val = next((v for v in reversed(atr_series) if v is not None), None)
+    prom = round(atr_val * 0.5, 8) if atr_val else None
+    pivots = build_zigzag_pivots(
+        highs, lows, swing_lookback=swing_lookback, min_prominence=prom
+    )
+    if len(pivots) < 4:  # prominence over-filtered — fall back to plain pivots
+        pivots = build_zigzag_pivots(highs, lows, swing_lookback=swing_lookback)
+
     last_bar_index = len(closes) - 1
     candidates: list[dict[str, Any]] = []
     rejected_counts: list[dict[str, Any]] = []
+    seen: set[tuple[str, int]] = set()
 
-    for scorer, name in (
-        (_score_impulse_bull, "impulse_bull"),
-        (_score_impulse_bear, "impulse_bear"),
-        (_score_impulse_bull_forming, "impulse_bull_forming"),
-        (_score_impulse_bear_forming, "impulse_bear_forming"),
-        (_score_abc_bull, "abc_bull"),
-        (_score_abc_bear, "abc_bear"),
-    ):
-        score, detail = scorer(pivots)
-        if detail.get("hard_violations"):
-            # Hard Elliott rule broken — not a valid count, never surfaced.
-            rejected_counts.append(
-                {"name": name, "hard_violations": detail["hard_violations"]}
-            )
-            continue
-        if score > 0 and "error" not in detail:
-            kind = name.replace("_forming", "")
-            if kind.startswith("impulse"):
-                seg = pivots[-6:] if len(pivots) >= 6 else pivots[-5:]
-            else:
-                seg = pivots[-4:]
-            detail = attach_projection_to_hypothesis(
-                detail,
-                seg,
-                kind=kind,
-                bars_ahead=15,
-                last_bar_index=last_bar_index,
-                times=times,
-            )
-            row = {"name": name, "score": round(score, 2), **detail}
-            for pt_list in (row.get("points"), row.get("projected_points")):
-                if not pt_list or not times:
-                    continue
-                for pt in pt_list:
-                    idx = pt.get("index")
-                    if idx is not None and 0 <= int(idx) < len(times):
-                        pt["time"] = int(times[int(idx)])
+    for trim in range(max(1, scan_depth)):
+        sub = pivots if trim == 0 else pivots[: len(pivots) - trim]
+        if len(sub) < 4:
+            break
+        endpoint = sub[-1].index if sub else last_bar_index
+        rows, rejected = _score_all_on(
+            sub, last_bar_index=last_bar_index, times=times, endpoint=endpoint
+        )
+        if trim == 0:
+            rejected_counts = rejected
+        for row in rows:
+            key = (row["name"], row["pivot_endpoint"])
+            if key in seen:
+                continue
+            seen.add(key)
             candidates.append(row)
 
     candidates.sort(key=lambda x: -x["score"])
+    candidates = candidates[:6]
+
+    # Confidence + ambiguity: normalise scores and flag near-ties so the
+    # output never implies a single "true" count when two fit comparably well.
+    total = sum(c["score"] for c in candidates) or 1.0
+    for c in candidates:
+        c["confidence"] = round(c["score"] / total, 3)
+    ambiguous = (
+        len(candidates) >= 2
+        and candidates[1]["score"] >= candidates[0]["score"] * 0.85
+        and candidates[0]["direction"] != candidates[1]["direction"]
+    )
+
     primary, alternate = _select_primary_alternate_hypotheses(candidates)
 
     from .elliott_detail import build_elliott_detail_panel
@@ -522,6 +582,7 @@ def analyze_elliott_wave(
         "rejected_counts": rejected_counts,
         "primary": primary,
         "alternate": alternate,
+        "ambiguous": ambiguous,
         "bias": bias,
         "invalidation_price": primary.get("invalidation_price") if primary else None,
         "forecast": primary.get("forecast") if primary else None,
