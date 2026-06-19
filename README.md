@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/enesp4rl4k-bist-trader-mcp-badge.png)](https://mseep.ai/app/enesp4rl4k-bist-trader-mcp)
+
 # BIST Trader MCP
 
 [![pytest](https://img.shields.io/badge/pytest-304%20passed-success)](https://github.com/Enesp4rl4k/bist-trader-mcp)
