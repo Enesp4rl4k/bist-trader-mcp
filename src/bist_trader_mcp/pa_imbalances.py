@@ -55,9 +55,9 @@ def _middle_bar_displacement(
         return False
     body = abs(closes[mid_idx] - closes[mid_idx - 1])
     impulse_ratio = body / bar_range
-    if atr_val and bar_range < atr_val * 0.25:
+    if atr_val and bar_range < atr_val * 0.35:
         return False
-    return impulse_ratio >= 0.42 or bar_range >= (atr_val or 0) * 0.35
+    return impulse_ratio >= 0.50 or bar_range >= (atr_val or 0) * 0.45
 
 
 def _min_gap_size(close: float, atr_val: float | None, min_gap_pct: float) -> float:

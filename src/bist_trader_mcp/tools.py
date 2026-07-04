@@ -41,6 +41,7 @@ from .deribit import build_deribit_surface, fetch_deribit_option_chain
 from .elliott_wave import analyze_elliott_wave as _analyze_elliott_wave
 from .evds import EVDSClient, EVDSError, EVDSObservation
 from .fear_greed import fetch_fear_greed
+from .fundamental_statements import analyze_financials as _analyze_financials
 from .fx import fx_forward_curve as _fx_forward_curve
 from .global_fx import fetch_fx_history, fetch_fx_matrix, fetch_fx_spot
 from .global_markets import fetch_global_pulse
@@ -2530,6 +2531,174 @@ def list_signal_generators() -> dict[str, Any]:
             "bollinger_mean_reversion": "period (int=20), std_dev (float=2.0), allow_short",
         },
     }
+
+
+def value_equity_dcf(
+    fcf0: float,
+    discount_rate: float,
+    high_growth: float,
+    shares_outstanding: float,
+    current_price: float | None = None,
+    market_cap: float | None = None,
+    years: int = 5,
+    terminal_growth: float = 0.05,
+    fade_to: float | None = None,
+    net_debt: float = 0.0,
+) -> dict[str, Any]:
+    """Two-stage DCF intrinsic value + reverse DCF + margin of safety.
+
+    ``fcf0`` is the latest annual free cash flow (TL). For BIST use a TL discount
+    rate (e.g. CAPM off the 10Y DİBS yield) so it matches nominal TL cash flows.
+    Reverse DCF returns the growth the current price already implies. Set
+    ``fade_to`` to taper stage-1 growth toward maturity.
+    """
+    from .valuation import value_equity
+
+    try:
+        return value_equity(
+            fcf0=float(fcf0),
+            discount_rate=float(discount_rate),
+            high_growth=float(high_growth),
+            shares_outstanding=float(shares_outstanding),
+            current_price=current_price,
+            market_cap=market_cap,
+            years=int(years),
+            terminal_growth=float(terminal_growth),
+            fade_to=fade_to,
+            net_debt=float(net_debt),
+        )
+    except (TypeError, ValueError) as e:
+        return {"error": "bad_input", "detail": f"{type(e).__name__}: {e}"}
+
+
+def analyze_swing_trade(
+    closes: list[float],
+    highs: list[float],
+    lows: list[float],
+    volumes: list[float] | None = None,
+    symbol: str | None = None,
+    account_equity: float | None = None,
+    risk_pct: float = 1.0,
+    min_rr: float = 1.5,
+    fundamental_score: float | None = None,
+    breakout_lookback: int = 20,
+) -> dict[str, Any]:
+    """Daily swing-trade setup: trend regime + pullback/breakout entry, stop,
+    R-multiple + structural targets, expected holding days and a time stop.
+
+    Feed DAILY OHLCV (>=60 bars; 200+ enables the full EMA stack). Optional
+    `fundamental_score` (-100..+100 from analyze_financial_statements' selection)
+    gates longs toward quality names. Returns setup='no_setup' when nothing clean.
+    """
+    from .swing_trade import analyze_swing_trade as _analyze_swing
+
+    try:
+        return _analyze_swing(
+            closes or [], highs or [], lows or [],
+            volumes=volumes, symbol=symbol,
+            account_equity=account_equity, risk_pct=float(risk_pct),
+            min_rr=float(min_rr), fundamental_score=fundamental_score,
+            breakout_lookback=int(breakout_lookback),
+        )
+    except (TypeError, ValueError, KeyError) as e:
+        return {"error": "bad_input", "detail": f"{type(e).__name__}: {e}"}
+
+
+def evaluate_signal_accuracy(
+    observations: list[dict[str, Any]] | None = None,
+    by_date: list[dict[str, Any]] | None = None,
+    score_field: str = "score",
+    return_field: str = "forward_return",
+    n_quantiles: int = 5,
+) -> dict[str, Any]:
+    """Measure whether a score predicts forward returns (the 'how accurate' tool).
+
+    Pooled mode: pass `observations` = [{score, forward_return}, ...] → rank IC,
+    quantile-bucket return spread + monotonicity, sign hit rate. Cross-sectional
+    mode: pass `by_date` = [{date, records:[{score, forward_return}]}] → per-date
+    IC averaged into IC mean / IR / positive-IC share. Build forward returns with
+    point-in-time (as-of) reads so there is no look-ahead.
+    """
+    from .factor_eval import evaluate_cross_sectional, evaluate_signal
+
+    try:
+        if by_date:
+            return evaluate_cross_sectional(
+                by_date, score_field=score_field, return_field=return_field
+            )
+        return evaluate_signal(
+            observations or [], score_field=score_field,
+            return_field=return_field, n_quantiles=int(n_quantiles),
+        )
+    except (TypeError, ValueError, KeyError) as e:
+        return {"error": "bad_input", "detail": f"{type(e).__name__}: {e}"}
+
+
+def rank_equity_universe(
+    records: list[dict[str, Any]],
+    factors: dict[str, dict[str, Any]] | None = None,
+    sector_neutral: bool = False,
+    top: int | None = None,
+) -> dict[str, Any]:
+    """Rank an equity universe by a cross-sectional factor composite.
+
+    Each record: {ticker, sector, **factor_values}. Default factors blend value
+    (fcf_yield, earnings_yield), quality (roe, roic, piotroski), momentum_6m,
+    safety (net_debt_to_ebitda) and low-vol. `sector_neutral=True` z-scores within
+    each sector. Build records from analyze_financial_statements via
+    universe_ranking.build_factor_record.
+    """
+    from .universe_ranking import rank_universe
+
+    try:
+        return rank_universe(
+            records or [], factors=factors,
+            sector_neutral=bool(sector_neutral),
+            top=int(top) if top is not None else None,
+        )
+    except (TypeError, ValueError, KeyError) as e:
+        return {"error": "bad_input", "detail": f"{type(e).__name__}: {e}"}
+
+
+def screen_equity_universe(
+    records: list[dict[str, Any]],
+    criteria: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Rule-based equity screen. Each criterion: {field, op, value} with op in
+    >, >=, <, <=, ==, !=. A record must satisfy all criteria to pass."""
+    from .universe_ranking import screen_universe
+
+    try:
+        return screen_universe(records or [], criteria or [])
+    except (TypeError, ValueError, KeyError) as e:
+        return {"error": "bad_input", "detail": f"{type(e).__name__}: {e}"}
+
+
+def analyze_financial_statements(
+    current: dict[str, Any],
+    prior: dict[str, Any] | None = None,
+    ticker: str | None = None,
+    altman_model: str = "em",
+) -> dict[str, Any]:
+    """CFO-grade analysis of KAP financial statements for stock selection.
+
+    Feed line items (income statement, balance sheet, cash flow) for the latest
+    reporting period as ``current`` and the year-ago period as ``prior``. Returns
+    ratio analysis, DuPont ROE, Piotroski F-Score, Altman Z-Score (emerging-market
+    Z'' by default), Beneish M-Score (manipulation), accruals quality, YoY growth,
+    and a composite ``selection`` score (-100..+100, grade, red flags) to rank on.
+
+    Accepts plain dicts so it works directly off KAP-ingested rows. ``prior``
+    unlocks the trend-based checks (Piotroski, Beneish, growth). For BIST, supply
+    TMS 29 inflation-adjusted statements and set ``is_inflation_adjusted: true`` —
+    otherwise growth is nominal and the output flags it.
+    """
+    try:
+        return _analyze_financials(
+            current, prior, ticker=ticker, altman_model=altman_model
+        )
+    except (TypeError, ValueError, KeyError) as e:
+        return {"error": "bad_input", "detail": f"{type(e).__name__}: {e}"}
 
 
 def calculate_performance_panel(

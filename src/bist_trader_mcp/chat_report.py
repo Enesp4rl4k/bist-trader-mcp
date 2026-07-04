@@ -55,6 +55,14 @@ def build_chat_trade_report(
         f"MTF kalite: {mtf.get('trade_quality')} · yön: {mtf.get('aligned_direction')}",
         f"Senaryo: {primary.get('id', 'n/a')} — {primary.get('reason', '')[:100]}",
     ]
+    backtest = ta.get("backtest_metrics")
+    if backtest:
+        technical_lines.append(
+            f"Tarihsel Backtest (Proxy): Sharpe {backtest.get('sharpe')} | "
+            f"Kazanma Oranı {backtest.get('win_rate_pct')}% | "
+            f"Kâr Faktörü {backtest.get('profit_factor')} | "
+            f"Maks DD {backtest.get('max_drawdown_pct')}%"
+        )
     ew_mtf = market_context.get("elliott_mtf") or {}
     if ew_mtf.get("notes_tr"):
         technical_lines.append(ew_mtf["notes_tr"])

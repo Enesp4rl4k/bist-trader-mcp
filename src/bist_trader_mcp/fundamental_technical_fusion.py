@@ -25,7 +25,11 @@ WARNINGS_TR: dict[str, str] = {
     "strong_fundamentals_vs_short": "güçlü temeller (short aleyhine)",
     "tv_symbol_mismatch": "TradingView sembol uyuşmazlığı",
     "data_quality_thin": "veri kalitesi zayıf",
+    "fundamental_red_flag": "temel kırmızı bayrak (manipülasyon/iflas riski)",
 }
+
+# Statement-level red flags severe enough to veto a long regardless of score.
+HARD_FUNDAMENTAL_RED_FLAGS = {"earnings_manipulation", "bankruptcy_distress"}
 
 
 def localize_warnings_tr(warnings: list[str]) -> list[str]:
@@ -132,6 +136,16 @@ def fuse_fundamental_technical(
             warnings.append("strong_fundamentals_vs_short")
             fusion_raw -= 10
 
+    # Hard statement-level red flags (earnings manipulation / bankruptcy distress)
+    # veto a long outright — a CFO-grade screen must never buy a flagged name.
+    hard_flags = [
+        r for r in (fund_score_pack.get("red_flags") or [])
+        if r in HARD_FUNDAMENTAL_RED_FLAGS
+    ]
+    if hard_flags and direction == "long":
+        warnings.append("fundamental_red_flag")
+        fusion_raw -= 45
+
     if symbol_check and not symbol_check.get("ok"):
         warnings.append("tv_symbol_mismatch")
         fusion_raw -= 12
@@ -170,9 +184,12 @@ def fuse_fundamental_technical(
         and "mtf_conflict" not in warnings
         and "elliott_htf_ltf_conflict" not in warnings
         and "tv_symbol_mismatch" not in warnings
+        and "fundamental_red_flag" not in warnings
     )
 
-    if tech_approved and not trade_allowed and "mtf_conflict" in warnings:
+    if tech_approved and not trade_allowed and "fundamental_red_flag" in warnings:
+        block_reason = "fusion_fundamental_red_flag"
+    elif tech_approved and not trade_allowed and "mtf_conflict" in warnings:
         block_reason = "fusion_mtf_conflict"
     elif tech_approved and not trade_allowed and "elliott_htf_ltf_conflict" in warnings:
         block_reason = "fusion_elliott_conflict"

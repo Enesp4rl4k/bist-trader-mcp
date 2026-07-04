@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .bist_calendar import filter_holiday_bars, is_bist_holiday
+from .bist_calendar import filter_holiday_bars, is_bist_holiday, is_bist_half_day
 from .data_quality import _bar_hour_istanbul
 
 # BIST cash ~10:00–18:00 Istanbul; holidays via bist_calendar
@@ -58,7 +58,10 @@ def filter_session_bars(
     keep_idx: list[int] = []
     for i in range(n):
         h = _bar_hour_istanbul(int(times[i]))
-        if start_h <= h < end_h:
+        current_end_h = end_h
+        if asset_class in ("bist_equity", "bist_index") and is_bist_half_day(int(times[i])):
+            current_end_h = 13
+        if start_h <= h < current_end_h:
             keep_idx.append(i)
 
     if len(keep_idx) < max(30, int(n * 0.25)):

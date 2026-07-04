@@ -250,7 +250,10 @@ def run_market_assistant(
 
     fund_enrich: dict[str, Any] | None = None
     if fetch_fundamentals:
-        fund_enrich = asyncio.run(enrich_fundamental_snapshot(symbol, market=market))
+        # NOTE: must use _run_async (not raw asyncio.run) — this flagship tool is
+        # invoked from the MCP server's async _call_tool, so a loop is already
+        # running on this thread and asyncio.run() would raise RuntimeError.
+        fund_enrich = _run_async(enrich_fundamental_snapshot(symbol, market=market))
         fund = market_ctx.get("fundamental") or {}
         fund["live"] = fund_enrich.get("fetched")
         fund["highlights_tr"] = fund_enrich.get("highlights_tr")
@@ -293,6 +296,29 @@ def run_market_assistant(
         fund_enrich=fund_enrich,
         symbol_check=symbol_check,
     )
+    
+    scale = fusion.get("position_scale_factor", 1.0)
+    if scale < 1.0 and trade_result.get("approved") and trade_result.get("plan"):
+        trade_result = dict(trade_result)
+        plan = dict(trade_result["plan"])
+        if "sizing" in plan:
+            sizing = dict(plan["sizing"])
+            sizing["units"] = round(sizing["units"] * scale, 4)
+            sizing["risk_amount"] = round(sizing["risk_amount"] * scale, 2)
+            sizing["notional"] = round(sizing["notional"] * scale, 2)
+            sizing["notional_pct_of_equity"] = round(sizing["notional_pct_of_equity"] * scale, 3)
+            sizing["actual_risk_pct_of_equity"] = round(sizing["actual_risk_pct_of_equity"] * scale, 3)
+            sizing["leverage"] = round(sizing["leverage"] * scale, 3)
+            plan["sizing"] = sizing
+        if "execution_plan" in plan and "position_size" in plan["execution_plan"]:
+            pos_size = dict(plan["execution_plan"]["position_size"])
+            pos_size["units"] = round(pos_size["units"] * scale, 4)
+            pos_size["notional"] = round(pos_size["notional"] * scale, 2)
+            pos_size["risk_amount"] = round(pos_size["risk_amount"] * scale, 2)
+            pos_size["risk_pct_equity"] = round(pos_size["risk_pct_equity"] * scale, 3)
+            plan["execution_plan"]["position_size"] = pos_size
+        trade_result["plan"] = plan
+
     if trade_result.get("approved") and not fusion.get("trade_allowed"):
         trade_result = dict(trade_result)
         trade_result["approved"] = False

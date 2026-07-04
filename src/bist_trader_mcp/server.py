@@ -21,10 +21,12 @@ from .tools import (
     aggregate_portfolio_greeks,
     analyze_chart_scenarios,
     analyze_elliott_wave,
+    analyze_financial_statements,
     analyze_market_context,
     analyze_mtf_price_action,
     analyze_price_action,
     analyze_range_imbalance,
+    analyze_swing_trade,
     apply_scenario_to_chart,
     apply_trade_to_chart,
     backtest_strategy,
@@ -47,6 +49,7 @@ from .tools import (
     design_mtf_trade_plan,
     design_scenario_trade_plan,
     design_trade_setup,
+    evaluate_signal_accuracy,
     find_viop_spread_opportunities,
     fit_yield_curve_nss,
     get_bist_eod_ohlcv,
@@ -96,12 +99,14 @@ from .tools import (
     optimize_portfolio_markowitz,
     pine_payload_from_trade_plan,
     portfolio_risk_check,
+    rank_equity_universe,
     render_pine_recipe,
     run_market_assistant,
     run_scenario_assistant,
     run_trade_assistant,
     scan_mtf_watchlist,
     scan_price_action_watchlist,
+    screen_equity_universe,
     simulate_option_strategy,
     stress_test_portfolio,
     tv_chart_set_symbol,
@@ -111,6 +116,7 @@ from .tools import (
     tv_health_check,
     update_trade_status,
     validate_trade_consistency,
+    value_equity_dcf,
 )
 
 server: Server = Server("bist-trader-mcp")
@@ -265,6 +271,239 @@ _register(
         until=args.get("until"),
         only_material=bool(args.get("only_material", False)),
         limit=int(args.get("limit", 100)),
+    ),
+)
+
+_register(
+    "analyze_financial_statements",
+    description=(
+        "CFO-grade analysis of KAP financial statements for stock selection. "
+        "Supply line items (income statement, balance sheet, cash flow) for the "
+        "latest period as `current` and the year-ago period as `prior`. Returns "
+        "ratios (profitability/liquidity/leverage/efficiency), DuPont ROE, "
+        "Piotroski F-Score, Altman Z-Score (emerging-market Z'' by default), "
+        "Beneish M-Score (earnings manipulation), accruals quality, YoY growth, "
+        "and a composite `selection` score (-100..+100 + grade + red_flags) to "
+        "rank on. For BIST supply TMS 29 inflation-adjusted figures and set "
+        "`is_inflation_adjusted: true`; otherwise growth is nominal and flagged. "
+        "Canonical line-item names: revenue, cogs, gross_profit, sga, "
+        "operating_income, ebitda, depreciation, interest_expense, pretax_income, "
+        "tax_expense, net_income, total_assets, current_assets, cash, inventory, "
+        "receivables, ppe, current_liabilities, short_term_debt, long_term_debt, "
+        "total_debt, total_liabilities, total_equity, retained_earnings, "
+        "shares_outstanding, operating_cash_flow, capex, free_cash_flow, market_cap."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "current": {
+                "type": "object",
+                "description": "Latest period line items (see canonical names).",
+            },
+            "prior": {
+                "type": "object",
+                "description": "Year-ago period — unlocks Piotroski/Beneish/growth.",
+            },
+            "ticker": {"type": "string"},
+            "altman_model": {
+                "type": "string",
+                "enum": ["em", "original"],
+                "default": "em",
+                "description": "'em' = Z'' (no market cap needed); 'original' needs market_cap.",
+            },
+        },
+        "required": ["current"],
+    },
+    handler=lambda args: analyze_financial_statements(
+        current=args.get("current") or {},
+        prior=args.get("prior"),
+        ticker=args.get("ticker"),
+        altman_model=str(args.get("altman_model", "em")),
+    ),
+)
+
+_register(
+    "value_equity_dcf",
+    description=(
+        "Two-stage DCF intrinsic value + reverse DCF + margin of safety for an "
+        "equity. `fcf0` = latest annual free cash flow. Stage 1 grows at "
+        "`high_growth` for `years` (optionally fading to `fade_to`), then a Gordon "
+        "terminal value at `terminal_growth`; requires discount_rate > "
+        "terminal_growth. Reverse DCF returns the growth the current price already "
+        "implies (pass current_price or market_cap). For BIST use a TL discount "
+        "rate (e.g. CAPM off the 10Y DİBS yield) to match nominal TL cash flows."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "fcf0": {"type": "number", "description": "Latest annual free cash flow (TL)"},
+            "discount_rate": {"type": "number", "description": "WACC / required return, decimal"},
+            "high_growth": {"type": "number", "description": "Stage-1 growth, decimal"},
+            "shares_outstanding": {"type": "number"},
+            "current_price": {"type": "number"},
+            "market_cap": {"type": "number"},
+            "years": {"type": "integer", "default": 5},
+            "terminal_growth": {"type": "number", "default": 0.05},
+            "fade_to": {"type": "number", "description": "Optional: fade stage-1 growth to this"},
+            "net_debt": {"type": "number", "default": 0.0},
+        },
+        "required": ["fcf0", "discount_rate", "high_growth", "shares_outstanding"],
+    },
+    handler=lambda args: value_equity_dcf(
+        fcf0=args["fcf0"],
+        discount_rate=args["discount_rate"],
+        high_growth=args["high_growth"],
+        shares_outstanding=args["shares_outstanding"],
+        current_price=args.get("current_price"),
+        market_cap=args.get("market_cap"),
+        years=int(args.get("years", 5)),
+        terminal_growth=float(args.get("terminal_growth", 0.05)),
+        fade_to=args.get("fade_to"),
+        net_debt=float(args.get("net_debt", 0.0)),
+    ),
+)
+
+_register(
+    "rank_equity_universe",
+    description=(
+        "Cross-sectional factor ranking of an equity universe (the quant leg). "
+        "Pass `records` = list of {ticker, sector, **factor_values}. Default "
+        "factors blend value (fcf_yield, earnings_yield), quality (roe, roic, "
+        "piotroski), momentum_6m, safety (net_debt_to_ebitda, direction=low) and "
+        "low-vol. Each factor is z-scored cross-sectionally, winsorized and "
+        "weighted into a composite; results are sorted best-first with rank + "
+        "percentile. `sector_neutral=true` z-scores within each sector (rank vs "
+        "peers). Build records from analyze_financial_statements output."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "records": {
+                "type": "array", "items": {"type": "object"},
+                "description": "Per-ticker {ticker, sector, **factor_values}.",
+            },
+            "factors": {
+                "type": "object",
+                "description": "Optional override: {name: {direction:'high'|'low', weight, group}}.",
+            },
+            "sector_neutral": {"type": "boolean", "default": False},
+            "top": {"type": "integer", "description": "Keep only the top N."},
+        },
+        "required": ["records"],
+    },
+    handler=lambda args: rank_equity_universe(
+        records=args.get("records") or [],
+        factors=args.get("factors"),
+        sector_neutral=bool(args.get("sector_neutral", False)),
+        top=args.get("top"),
+    ),
+)
+
+_register(
+    "screen_equity_universe",
+    description=(
+        "Rule-based equity screen. `records` = list of {ticker, sector, "
+        "**fields}; `criteria` = list of {field, op, value} with op in "
+        ">, >=, <, <=, ==, !=. A record passes only if it satisfies all criteria "
+        "(and has the field). Returns passing tickers with the matched fields."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "records": {"type": "array", "items": {"type": "object"}},
+            "criteria": {
+                "type": "array", "items": {"type": "object"},
+                "description": "[{field, op, value}, ...]",
+            },
+        },
+        "required": ["records", "criteria"],
+    },
+    handler=lambda args: screen_equity_universe(
+        records=args.get("records") or [],
+        criteria=args.get("criteria") or [],
+    ),
+)
+
+_register(
+    "analyze_swing_trade",
+    description=(
+        "Daily swing-trade setup detector — the multi-day-hold layer. Feed DAILY "
+        "OHLCV (>=60 bars; 200+ for the full EMA stack). Classifies trend regime "
+        "(EMA 20/50/200), detects a clean entry (trend pullback to EMA, or "
+        "breakout-retest of prior high/low; long & short), and returns entry, "
+        "structure/ATR stop, R-multiple + structural targets, expected holding "
+        "days and a TIME STOP (bars) — the swing-specific risk control. Optional "
+        "`fundamental_score` (-100..+100 from analyze_financial_statements) gates "
+        "longs toward quality names. `account_equity` adds 1%-risk sizing. Returns "
+        "setup='no_setup' when nothing clean is present."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "closes": {"type": "array", "items": {"type": "number"}},
+            "highs": {"type": "array", "items": {"type": "number"}},
+            "lows": {"type": "array", "items": {"type": "number"}},
+            "volumes": {"type": "array", "items": {"type": "number"}},
+            "symbol": {"type": "string"},
+            "account_equity": {"type": "number"},
+            "risk_pct": {"type": "number", "default": 1.0},
+            "min_rr": {"type": "number", "default": 1.5},
+            "fundamental_score": {
+                "type": "number",
+                "description": "-100..+100 from analyze_financial_statements selection.",
+            },
+            "breakout_lookback": {"type": "integer", "default": 20},
+        },
+        "required": ["closes", "highs", "lows"],
+    },
+    handler=lambda args: analyze_swing_trade(
+        closes=args.get("closes") or [],
+        highs=args.get("highs") or [],
+        lows=args.get("lows") or [],
+        volumes=args.get("volumes"),
+        symbol=args.get("symbol"),
+        account_equity=args.get("account_equity"),
+        risk_pct=float(args.get("risk_pct", 1.0)),
+        min_rr=float(args.get("min_rr", 1.5)),
+        fundamental_score=args.get("fundamental_score"),
+        breakout_lookback=int(args.get("breakout_lookback", 20)),
+    ),
+)
+
+_register(
+    "evaluate_signal_accuracy",
+    description=(
+        "Measure whether a score actually predicts forward returns — the "
+        "'how accurate' tool. Pooled mode: `observations` = [{score, "
+        "forward_return}] → rank IC, quantile-bucket return spread + "
+        "monotonicity, sign hit rate. Cross-sectional mode: `by_date` = "
+        "[{date, records:[{score, forward_return}]}] → per-date IC averaged into "
+        "IC mean / IR / positive-IC share. Use point-in-time forward returns "
+        "(PanelStore as-of reads) so there is no look-ahead. Rule of thumb: "
+        "|IC| ≥ 0.03 usable, ≥ 0.05 strong."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "observations": {
+                "type": "array", "items": {"type": "object"},
+                "description": "Pooled: [{score, forward_return}, ...]",
+            },
+            "by_date": {
+                "type": "array", "items": {"type": "object"},
+                "description": "Cross-sectional: [{date, records:[{score, forward_return}]}]",
+            },
+            "score_field": {"type": "string", "default": "score"},
+            "return_field": {"type": "string", "default": "forward_return"},
+            "n_quantiles": {"type": "integer", "default": 5},
+        },
+    },
+    handler=lambda args: evaluate_signal_accuracy(
+        observations=args.get("observations"),
+        by_date=args.get("by_date"),
+        score_field=str(args.get("score_field", "score")),
+        return_field=str(args.get("return_field", "forward_return")),
+        n_quantiles=int(args.get("n_quantiles", 5)),
     ),
 )
 

@@ -107,9 +107,11 @@ def detect_trading_range(
     position_pct = (close - range_low) / width if width else 0.5
     position_pct = max(0.0, min(1.0, position_pct))
 
-    if position_pct <= 0.33:
+    # Fibonacci-based zone divisions around EQ (0.50), with a thin neutral band
+    # at the mid so we don't fade right at equilibrium.
+    if position_pct < 0.45:
         zone: RangeZone = "discount"
-    elif position_pct >= 0.67:
+    elif position_pct > 0.55:
         zone: RangeZone = "premium"
     else:
         zone = "equilibrium"
@@ -141,6 +143,17 @@ def detect_trading_range(
         "zone": zone,
         "quality_score": round(quality, 1),
         "window_bars": w,
+        "fib_levels": {
+            "0.0": round(range_low, 8),
+            "0.25": round(range_low + width * 0.25, 8),
+            "0.50": round(mid, 8),
+            "0.75": round(range_low + width * 0.75, 8),
+            "1.0": round(range_high, 8),
+            "ote_long_low": round(range_low + width * 0.214, 8),   # 0.786 retracement from high
+            "ote_long_high": round(range_low + width * 0.382, 8),  # 0.618 retracement from high
+            "ote_short_low": round(range_low + width * 0.618, 8),  # 0.618 retracement from low
+            "ote_short_high": round(range_low + width * 0.786, 8), # 0.786 retracement from low
+        }
     }
 
 
@@ -183,12 +196,95 @@ def detect_liquidity_sweep(
     return None
 
 
+def detect_range_deviation(
+    highs: list[float],
+    lows: list[float],
+    closes: list[float],
+    range_box: dict[str, Any],
+    *,
+    lookback: int = 15,
+) -> dict[str, Any] | None:
+    """Detect when price deviates outside range boundaries (1-5 bars) and closes back inside.
+
+    Confirmed range deviations offer high-probability fade entries.
+    """
+    if not range_box.get("active"):
+        return None
+    rh = float(range_box["range_high"])
+    rl = float(range_box["range_low"])
+    n = len(closes)
+    if n < lookback + 1:
+        return None
+
+    current_close = closes[-1]
+    is_inside = rl <= current_close <= rh
+    if not is_inside:
+        return None
+
+    # Scale-relative tolerance for "decisive" closes outside the range.
+    width = rh - rl
+    tol = width * 0.03 if width > 0 else rl * 0.005
+
+    # Scan the last 1 to 5 bars for deviation
+    for length in range(1, 6):
+        # We need to make sure we don't go out of bounds
+        if n - 1 - length < 0:
+            break
+
+        # Check Deviation Low:
+        # At least one bar wicked below range_low, but the excursion bars (excluding the
+        # current reclaim bar) did NOT all close decisively below — i.e. not a real breakdown.
+        was_below = any(lows[n - 1 - k] < rl for k in range(length))
+        prior_closes_below = [closes[n - 1 - k] < rl - tol for k in range(1, length)]
+        sustained_break_bear = len(prior_closes_below) > 0 and all(prior_closes_below)
+
+        if was_below and not sustained_break_bear:
+            lowest_idx = n - 1 - length
+            for k in range(length):
+                idx = n - 1 - k
+                if lows[idx] < lows[lowest_idx]:
+                    lowest_idx = idx
+            return {
+                "kind": "deviation_low",
+                "bars_outside": length,
+                "extreme_price": lows[lowest_idx],
+                "level": rl,
+                "close": current_close,
+                "play": "sweep_fade_long",
+            }
+
+        # Check Deviation High:
+        # At least one bar wicked above range_high, but the excursion bars did NOT all close
+        # decisively above — i.e. not a real breakout.
+        was_above = any(highs[n - 1 - k] > rh for k in range(length))
+        prior_closes_above = [closes[n - 1 - k] > rh + tol for k in range(1, length)]
+        sustained_break_bull = len(prior_closes_above) > 0 and all(prior_closes_above)
+
+        if was_above and not sustained_break_bull:
+            highest_idx = n - 1 - length
+            for k in range(length):
+                idx = n - 1 - k
+                if highs[idx] > highs[highest_idx]:
+                    highest_idx = idx
+            return {
+                "kind": "deviation_high",
+                "bars_outside": length,
+                "extreme_price": highs[highest_idx],
+                "level": rh,
+                "close": current_close,
+                "play": "sweep_fade_short",
+            }
+
+    return None
+
+
 def recommend_range_play(
     range_box: dict[str, Any],
     sweep: dict[str, Any] | None,
     *,
     close: float,
     structure: str,
+    deviation: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Primary range trade idea (fade vs breakout vs wait)."""
     if not range_box.get("active"):
@@ -199,6 +295,20 @@ def recommend_range_play(
     rl = float(range_box["range_low"])
     mid = float(range_box["range_mid"])
     q = float(range_box.get("quality_score") or 0)
+
+    # Deviation has the highest confirmation priority
+    if deviation:
+        play = deviation.get("play")
+        direction = "short" if play == "sweep_fade_short" else "long"
+        return {
+            "play": play,
+            "direction": direction,
+            "confidence": min(98.0, q + 25),
+            "entry_hint": rh if direction == "short" else rl,
+            "stop_hint": deviation.get("extreme_price"),
+            "target_hint": mid,
+            "reason": f"Range deviation ({deviation.get('kind')} over {deviation.get('bars_outside')} bars) — fade back to EQ.",
+        }
 
     if sweep:
         play = sweep.get("play")
@@ -214,24 +324,38 @@ def recommend_range_play(
         }
 
     if zone == "discount":
+        # Check if price is in the Fibonacci OTE (Optimal Trade Entry) buy zone
+        width = rh - rl
+        ote_low = rl + width * 0.214
+        ote_high = rl + width * 0.382
+        is_ote = ote_low <= close <= ote_high
+        conf = q + (18 if structure in ("ranging", "bullish", "transition") else 0)
         return {
             "play": "fade_long",
             "direction": "long",
-            "confidence": q + (10 if structure in ("ranging", "bullish", "transition") else -5),
-            "entry_hint": rl,
+            "confidence": min(95.0, conf + (8 if is_ote else 0)),
+            "entry_hint": round(ote_high, 8) if is_ote else rl,
             "stop_hint": rl - (rh - rl) * 0.08,
             "target_hint": mid,
-            "reason": "Discount zone — buy range low / mid target.",
+            "reason": f"Discount zone ({'Fibonacci OTE Buy Zone' if is_ote else 'general'}) — buy range low / mid target.",
+            "is_ote": is_ote,
         }
     if zone == "premium":
+        # Check if price is in the Fibonacci OTE sell zone
+        width = rh - rl
+        ote_low = rl + width * 0.618
+        ote_high = rl + width * 0.786
+        is_ote = ote_low <= close <= ote_high
+        conf = q + (18 if structure in ("ranging", "bearish", "transition") else 0)
         return {
             "play": "fade_short",
             "direction": "short",
-            "confidence": q + (10 if structure in ("ranging", "bearish", "transition") else -5),
-            "entry_hint": rh,
+            "confidence": min(95.0, conf + (8 if is_ote else 0)),
+            "entry_hint": round(ote_low, 8) if is_ote else rh,
             "stop_hint": rh + (rh - rl) * 0.08,
             "target_hint": mid,
-            "reason": "Premium zone — sell range high / mid target.",
+            "reason": f"Premium zone ({'Fibonacci OTE Sell Zone' if is_ote else 'general'}) — sell range high / mid target.",
+            "is_ote": is_ote,
         }
     if close > rh * 1.001:
         return {
@@ -277,7 +401,8 @@ def build_range_panel(
         highs, lows, closes, atr_val=atr_val, window=window
     )
     sweep = detect_liquidity_sweep(highs, lows, closes, box) if box.get("active") else None
-    play = recommend_range_play(box, sweep, close=closes[-1], structure=structure)
+    deviation = detect_range_deviation(highs, lows, closes, box) if box.get("active") else None
+    play = recommend_range_play(box, sweep, close=closes[-1], structure=structure, deviation=deviation)
 
     eq_highs = _find_equal_liquidity(swing_high_prices or [])
     eq_lows = _find_equal_liquidity(swing_low_prices or [])
@@ -289,6 +414,7 @@ def build_range_panel(
             "equal_lows": eq_lows[:3],
         },
         "sweep": sweep,
+        "deviation": deviation,
         "recommended_play": play,
         "range_trade_mode": box.get("active", False),
     }
@@ -297,6 +423,7 @@ def build_range_panel(
 __all__ = [
     "detect_trading_range",
     "detect_liquidity_sweep",
+    "detect_range_deviation",
     "recommend_range_play",
     "build_range_panel",
 ]

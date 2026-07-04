@@ -7,6 +7,7 @@
 | [PERFORMANCE_AND_CONSISTENCY.md](PERFORMANCE_AND_CONSISTENCY.md) | Geliştirici | Hız, tekrar hesap yok, deterministik kurallar |
 | [PA_CHECKLIST_TR.md](PA_CHECKLIST_TR.md) | Analist | PA / EW / veri kalitesi kontrol listesi |
 | [MASTER_PLAN_TRADE_ASSISTANT.md](MASTER_PLAN_TRADE_ASSISTANT.md) | Yol haritası | Faz 0–4, kabul kriterleri |
+| [HEDGE_FUND_GRADE_PLAN.md](HEDGE_FUND_GRADE_PLAN.md) | Yol haritası | Hedge-fund seviyesi temel+kuant motor, Faz A–E |
 | [quickstart.md](quickstart.md) | Kurulum | EVDS, pytest, Claude Desktop |
 | [COMPOSITION_SETUP.md](COMPOSITION_SETUP.md) | TV | `TRADINGVIEW_MCP_PATH`, CDP 9222 |
 | [TURIB_AND_TV_ANALYSIS.md](TURIB_AND_TV_ANALYSIS.md) | TR gıda / TV | TÜRİB, sembol, FVG |

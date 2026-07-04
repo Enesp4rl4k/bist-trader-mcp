@@ -30,3 +30,39 @@ def test_filter_keeps_session_bars():
     assert out["filtered"] is True
     assert out["bars_kept"] == len(session_times)
     assert out["bars_dropped"] == 8
+
+
+def test_filter_session_bars_half_day():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from bist_trader_mcp.bist_calendar import is_bist_half_day
+
+    # 2026-10-28 is a known BIST half-day (Republic Day Eve)
+    dt = datetime(2026, 10, 28, 11, 0, 0, tzinfo=ZoneInfo("Europe/Istanbul"))
+    ts_in = int(dt.timestamp())
+    assert is_bist_half_day(ts_in) is True
+
+    dt_off = datetime(2026, 10, 28, 14, 0, 0, tzinfo=ZoneInfo("Europe/Istanbul"))
+    ts_off = int(dt_off.timestamp())
+
+    # Build a series where we have 36 bars inside the morning session (10:00-13:00)
+    # and 12 bars in the afternoon (13:00-18:00) which should be dropped on half-day
+    times = []
+    # Morning: 10:00 to 12:59
+    for m in range(0, 180, 5):  # 36 bars
+        times.append(int(datetime(2026, 10, 28, 10, 0, 0, tzinfo=ZoneInfo("Europe/Istanbul")).timestamp()) + m * 60)
+    # Afternoon: 13:00 to 14:00
+    for m in range(0, 60, 5):   # 12 bars
+        times.append(int(datetime(2026, 10, 28, 13, 0, 0, tzinfo=ZoneInfo("Europe/Istanbul")).timestamp()) + m * 60)
+
+    n = len(times)
+    closes = [100.0] * n
+    highs = [101.0] * n
+    lows = [99.0] * n
+
+    out = filter_session_bars(closes, highs, lows, times, asset_class="bist_equity")
+    assert out["filtered"] is True
+    # Afternoon bars (starting at 13:00) should be dropped
+    assert out["bars_kept"] == 36
+    assert out["bars_dropped"] == 12
+

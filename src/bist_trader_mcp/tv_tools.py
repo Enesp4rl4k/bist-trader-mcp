@@ -19,6 +19,59 @@ def _bars_from_ohlcv(res: dict[str, Any]) -> dict[str, list[float]]:
     }
 
 
+def timeframe_to_seconds(timeframe: str) -> int | None:
+    """Parse a TradingView timeframe label into seconds (None if unknown).
+
+    Accepts bare minutes ("15", "60", "240"), and D/W/M suffixes ("1D", "D",
+    "1W", "1M"). Used to confirm fetched bars actually match the timeframe we
+    asked TradingView to switch to (guards a switch/fetch race condition).
+    """
+    tf = str(timeframe).strip().upper()
+    if not tf:
+        return None
+    if tf.isdigit():
+        return int(tf) * 60
+    unit = tf[-1]
+    num = tf[:-1]
+    if num != "" and not num.isdigit():
+        return None  # e.g. "BOGUS" — not a "<digits><unit>" label
+    mult = int(num) if num.isdigit() else 1
+    if unit == "D":
+        return mult * 86_400
+    if unit == "W":
+        return mult * 7 * 86_400
+    if unit == "M":  # month (approx) — TV uses M for monthly
+        return mult * 30 * 86_400
+    if unit == "S":
+        return mult
+    return None
+
+
+def verify_bar_timeframe(times: list[int], timeframe: str) -> dict[str, Any]:
+    """Confirm the median bar spacing matches the requested timeframe.
+
+    Returns ``ok`` plus diagnostics. Tolerant by design: intraday series carry
+    overnight/weekend gaps, so we check the *median* delta lands within a
+    [0.5x, 2x] band of the expected interval rather than demanding exactness.
+    """
+    expected = timeframe_to_seconds(timeframe)
+    if expected is None or len(times) < 3:
+        return {"ok": True, "checked": False, "timeframe": timeframe}
+    deltas = sorted(int(times[i]) - int(times[i - 1]) for i in range(1, len(times)))
+    pos = [d for d in deltas if d > 0]
+    if not pos:
+        return {"ok": True, "checked": False, "timeframe": timeframe}
+    actual = pos[len(pos) // 2]
+    ok = expected * 0.5 <= actual <= expected * 2.0
+    return {
+        "ok": ok,
+        "checked": True,
+        "timeframe": timeframe,
+        "expected_sec": expected,
+        "median_delta_sec": actual,
+    }
+
+
 def tv_verify_chart_symbol(expected_tv: str) -> dict[str, Any]:
     """Confirm active chart symbol matches normalized TV ticker."""
     state = tv_chart_get_state()
@@ -170,20 +223,34 @@ def tv_fetch_mtf_ohlcv(
     if not sym.get("success", True) and sym.get("error"):
         return sym
 
-    tv_chart_set_timeframe(ltf_timeframe)
-    time.sleep(1.5)
-    ltf_raw = tv_data_get_ohlcv(count=bar_n)
+    def _fetch_tf(tf: str) -> tuple[dict[str, Any], dict[str, list[float]], dict[str, Any]]:
+        """Set timeframe, pull bars, and verify the bars match it — retry once.
+
+        TradingView can lag a timeframe switch, returning the *previous*
+        resolution's bars. A single re-pull after a longer wait clears it.
+        """
+        tv_chart_set_timeframe(tf)
+        time.sleep(1.5)
+        raw = tv_data_get_ohlcv(count=bar_n)
+        bars = _bars_from_ohlcv(raw)
+        check = verify_bar_timeframe(bars.get("times") or [], tf)
+        if check.get("checked") and not check.get("ok"):
+            time.sleep(2.0)
+            raw = tv_data_get_ohlcv(count=bar_n)
+            bars = _bars_from_ohlcv(raw)
+            retry = verify_bar_timeframe(bars.get("times") or [], tf)
+            retry["retried"] = True
+            check = retry
+        return raw, bars, check
+
+    ltf_raw, ltf, ltf_tf_check = _fetch_tf(ltf_timeframe)
     if not ltf_raw.get("bars") and ltf_raw.get("error"):
         return ltf_raw
 
-    tv_chart_set_timeframe(htf_timeframe)
-    time.sleep(1.5)
-    htf_raw = tv_data_get_ohlcv(count=bar_n)
+    htf_raw, htf, htf_tf_check = _fetch_tf(htf_timeframe)
 
     from .data_quality import assess_ohlcv_quality, merge_mtf_data_quality
 
-    ltf = _bars_from_ohlcv(ltf_raw)
-    htf = _bars_from_ohlcv(htf_raw)
     ac = cfg["asset_class"]
 
     from .session_filter import filter_session_bars, is_intraday_timeframe
@@ -236,6 +303,7 @@ def tv_fetch_mtf_ohlcv(
         "data_quality_htf": htf_q,
         "data_quality_ltf": ltf_q,
         "session_filter": session_meta,
+        "timeframe_check": {"ltf": ltf_tf_check, "htf": htf_tf_check},
     }
 
 
@@ -306,6 +374,26 @@ def tv_draw_trend_line(
     return {"source": "bist-trader-mcp — tv_tools", **tv_call(*args)}
 
 
+def tv_draw_rectangle(
+    time1: int,
+    price1: float,
+    time2: int,
+    price2: float,
+    overrides: str | None = None,
+) -> dict[str, Any]:
+    args = [
+        "draw", "shape",
+        "-t", "rectangle",
+        "-p", str(price1),
+        "--time", str(time1),
+        "--price2", str(price2),
+        "--time2", str(time2),
+    ]
+    if overrides:
+        args.extend(["--overrides", overrides])
+    return {"source": "bist-trader-mcp — tv_tools", **tv_call(*args)}
+
+
 def tv_draw_text(
     time: int,
     price: float,
@@ -350,6 +438,8 @@ def tv_capture_screenshot(
 
 
 __all__ = [
+    "timeframe_to_seconds",
+    "verify_bar_timeframe",
     "tv_health_check",
     "tv_chart_set_symbol",
     "tv_chart_set_timeframe",
@@ -363,6 +453,7 @@ __all__ = [
     "tv_draw_position",
     "tv_draw_horizontal_line",
     "tv_draw_trend_line",
+    "tv_draw_rectangle",
     "tv_draw_text",
     "tv_draw_clear",
     "tv_alert_create",

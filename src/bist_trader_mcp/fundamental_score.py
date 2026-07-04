@@ -36,6 +36,51 @@ POSITIVE_KAP_KEYWORDS = (
 )
 
 
+SECTOR_PE_PB_AVERAGES: dict[str, tuple[float, float]] = {
+    "XBANK": (5.0, 1.1),
+    "XUSIN": (14.0, 3.2),
+    "XGIDA": (16.0, 4.0),
+    "XKMYA": (12.0, 3.0),
+    "XHOLD": (8.0, 1.5),
+    "XMANA": (18.0, 5.0),
+    "XULAS": (7.0, 1.3),
+}
+
+
+def _score_ratios_vs_sector(
+    pe: float | None,
+    pb: float | None,
+    sector_alias: str | None,
+) -> tuple[float, list[str]]:
+    if not sector_alias:
+        return 0.0, []
+    
+    averages = SECTOR_PE_PB_AVERAGES.get(sector_alias, (12.0, 2.5))
+    avg_pe, avg_pb = averages
+    pts = 0.0
+    labels: list[str] = []
+    
+    if pe is not None and pe > 0:
+        ratio = pe / avg_pe
+        if ratio < 0.7:
+            pts += 8.0
+            labels.append("cheap_pe_vs_sector")
+        elif ratio > 1.3:
+            pts -= 8.0
+            labels.append("expensive_pe_vs_sector")
+            
+    if pb is not None and pb > 0:
+        ratio = pb / avg_pb
+        if ratio < 0.7:
+            pts += 8.0
+            labels.append("cheap_pb_vs_sector")
+        elif ratio > 1.3:
+            pts -= 8.0
+            labels.append("expensive_pb_vs_sector")
+            
+    return pts, labels
+
+
 def score_from_enrich(fund_enrich: dict[str, Any] | None) -> dict[str, Any]:
     """-100..+100 bias from live fundamental snapshot."""
     if not fund_enrich:
@@ -45,14 +90,24 @@ def score_from_enrich(fund_enrich: dict[str, Any] | None) -> dict[str, Any]:
     score = 0.0
     labels: list[str] = []
 
-    # --- Rigorous equity ratios (dominant for BIST equities) ---
-    ratio_pack = fetched.get("fundamental_ratios_score") or {}
+    # --- Rigorous equity core (dominant for BIST equities) ---
+    # Prefer the CFO-grade statement analysis (Piotroski/Altman/Beneish/DCF-driven
+    # `selection` score) when present; fall back to the Yahoo summary-ratio pack.
+    stmt_pack = fetched.get("financial_statements_score") or {}
+    yahoo_pack = fetched.get("fundamental_ratios_score") or {}
+    core_pack = stmt_pack if stmt_pack.get("available") else yahoo_pack
+    core_source = "statements" if stmt_pack.get("available") else (
+        "yahoo_ratios" if yahoo_pack.get("available") else "none"
+    )
+    red_flags = list(stmt_pack.get("red_flags") or [])
     ratio_score = 0.0
-    if ratio_pack.get("available"):
-        # Ratio composite is -100..100; weight it as the core of the score.
-        ratio_score = float(ratio_pack.get("score") or 0) * 0.6
+    if core_pack.get("available"):
+        # Composite is -100..100; weight it as the core of the score.
+        ratio_score = float(core_pack.get("score") or 0) * 0.6
         score += ratio_score
-        labels.extend(ratio_pack.get("factors") or [])
+        labels.extend(core_pack.get("factors") or [])
+        labels.extend(f"redflag:{r}" for r in red_flags)
+    ratio_pack = core_pack  # kept for the return fields below
 
     snap = fetched.get("bist_snapshot") or {}
     ch = snap.get("change_pct")
@@ -112,6 +167,24 @@ def score_from_enrich(fund_enrich: dict[str, Any] | None) -> dict[str, Any]:
             labels.append("greed")
 
     rot = fetched.get("sector_rotation") or {}
+    sector_alias = rot.get("sector_alias")
+    funds = fetched.get("fundamentals") or {}
+    pe = funds.get("trailing_pe")
+    pb = funds.get("price_to_book")
+    
+    sector_ratio_pts, sector_ratio_labels = _score_ratios_vs_sector(pe, pb, sector_alias)
+    score += sector_ratio_pts
+    labels.extend(sector_ratio_labels)
+
+    sec_rank = rot.get("sector_rank")
+    if sec_rank is not None:
+        if sec_rank <= 3:
+            score += 6
+            labels.append("strong_sector_rank")
+        elif sec_rank >= 12:
+            score -= 6
+            labels.append("weak_sector_rank")
+
     rel = rot.get("ticker_relative_strength_pct")
     if rel is not None:
         if rel > 3:
@@ -145,6 +218,8 @@ def score_from_enrich(fund_enrich: dict[str, Any] | None) -> dict[str, Any]:
         "ratio_score": round(ratio_score, 1),
         "ratio_grade": ratio_pack.get("grade", "NA"),
         "has_ratios": bool(ratio_pack.get("available")),
+        "core_source": core_source,
+        "red_flags": red_flags,
     }
 
 

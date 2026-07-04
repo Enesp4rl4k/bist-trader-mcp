@@ -356,16 +356,48 @@ def analyze_chart_scenarios(
     # advisory warnings (EW is overlay, not the trade basis).
     rules_total = int((primary_ew or {}).get("rules_total") or 0)
     rules_passed = int((primary_ew or {}).get("rules_passed") or 0)
-    if rules_total >= 3 and rules_passed < 2:
+    if rules_total >= 3 and (rules_passed / rules_total) < 0.75:
         diagnostics.setdefault("warnings", []).append(
             "Elliott impulse rules failed — primary count weak"
         )
         if not pa_primary:
             trade_ok_base = False
+
     if ew_mtf.get("conflict") or ew_mtf.get("alignment_quality") == "conflict":
         diagnostics.setdefault("warnings", []).append("HTF/LTF Elliott direction conflict")
         if not pa_primary:
             trade_ok_base = False
+    # Quick historical backtest metric integration
+    backtest_metrics = None
+    if len(ltf_closes) >= 30:
+        from .backtest import run_backtest, signal_from_sma_crossover, signal_from_bollinger_mean_reversion
+        is_crypto = cfg.get("asset_class") == "crypto"
+        if is_crypto:
+            signals = signal_from_bollinger_mean_reversion(ltf_closes, period=20, std_dev=2.0)
+        else:
+            signals = signal_from_sma_crossover(ltf_closes, fast=10, slow=30)
+        try:
+            res = run_backtest(
+                closes=ltf_closes,
+                signals=signals,
+                initial_equity=100_000.0,
+                commission_pct=0.05,
+                slippage_pct=0.05,
+                periods_per_year=365 if is_crypto else 252,
+            )
+            perf = res.get("performance") or {}
+            stats = perf.get("trade_stats") or {}
+            dd = perf.get("drawdown") or {}
+            backtest_metrics = {
+                "sharpe": round(float(perf.get("sharpe_ratio") or 0.0), 2),
+                "win_rate_pct": round(float(stats.get("win_rate_pct") or 0.0), 1),
+                "profit_factor": round(float(stats.get("profit_factor") or 0.0), 2),
+                "max_drawdown_pct": round(float(dd.get("max_drawdown_pct") or 0.0), 1),
+                "trades": int(stats.get("trades") or 0),
+            }
+        except Exception:
+            pass
+
     confidence = compute_analysis_confidence(
         mtf=mtf,
         ew_primary=primary_ew,
@@ -373,6 +405,7 @@ def analyze_chart_scenarios(
         diagnostics=diagnostics,
         trade_candidate=trade_ok_base,
         pa_primary=pa_primary,
+        backtest_metrics=backtest_metrics,
     )
     trade_ok = trade_ok_base and confidence.get("trade_recommended", False)
 
@@ -400,6 +433,7 @@ def analyze_chart_scenarios(
         "trade_candidate": trade_ok,
         "recommended_action": "consider_trade" if trade_ok else primary_scenario.get("action"),
         "confidence": confidence,
+        "backtest_metrics": backtest_metrics,
         "executive_summary_tr": summary_tr,
         "report": _build_report(symbol, mtf, ew, primary_scenario, scenarios, confidence),
         "diagnostics": diagnostics,

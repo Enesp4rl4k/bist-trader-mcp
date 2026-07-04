@@ -24,6 +24,7 @@ def compute_analysis_confidence(
     diagnostics: dict[str, Any] | None,
     trade_candidate: bool,
     pa_primary: bool = False,
+    backtest_metrics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """0–100 confidence with breakdown (not a guarantee of profit).
 
@@ -86,6 +87,21 @@ def compute_analysis_confidence(
     else:
         w_pa, w_mtf, w_ew, w_dq = 0.35, 0.30, 0.20, 0.10
 
+    # Backtest performance adjustment (only when the proxy actually traded)
+    backtest_bonus = 0.0
+    if backtest_metrics and int(backtest_metrics.get("trades") or 0) > 0:
+        sharpe = float(backtest_metrics.get("sharpe") or 0.0)
+        win_rate = float(backtest_metrics.get("win_rate_pct") or 0.0)
+        if sharpe > 1.2:
+            backtest_bonus += 5.0
+        elif sharpe < 0.0:
+            backtest_bonus -= 8.0
+
+        if win_rate > 60.0:
+            backtest_bonus += 3.0
+        elif win_rate < 35.0:
+            backtest_bonus -= 5.0
+
     raw = (
         pa_conf * w_pa
         + mtf_pts * w_mtf
@@ -94,6 +110,7 @@ def compute_analysis_confidence(
         + align_bonus
         + range_bonus
         + momentum_bonus
+        + backtest_bonus
         - warn_penalty
     )
     score = round(min(100.0, max(0.0, raw)), 1)
@@ -123,6 +140,7 @@ def compute_analysis_confidence(
             "warning_penalty": warn_penalty,
             "range_bonus": range_bonus,
             "momentum_bonus": momentum_bonus,
+            "backtest_bonus": backtest_bonus,
             "pa_primary_reweighted": reweighted,
         },
         "warning_count": len(warnings),

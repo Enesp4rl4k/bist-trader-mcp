@@ -35,6 +35,7 @@ def score_confluence(
     structure_events: list[dict[str, Any]] | None = None,
     range_ctx: dict[str, Any] | None = None,
     indicator_signals: dict[str, Any] | None = None,
+    block_ctx: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """0–100 confluence for a direction."""
     score = 40.0
@@ -94,18 +95,18 @@ def score_confluence(
 
     for ev in structure_events or []:
         kind = ev.get("kind")
-        if direction == "long" and kind in ("bos_bull", "choch_bull"):
-            score += 10
+        if direction == "long" and kind in ("bos_bull", "choch_bull", "mss_bull"):
+            score += 15 if kind == "mss_bull" else 10
             factors.append(kind)
-        if direction == "short" and kind in ("bos_bear", "choch_bear"):
-            score += 10
+        if direction == "short" and kind in ("bos_bear", "choch_bear", "mss_bear"):
+            score += 15 if kind == "mss_bear" else 10
             factors.append(kind)
-        if direction == "long" and kind == "choch_bear":
-            score -= 15
-            factors.append("choch_against_long")
-        if direction == "short" and kind == "choch_bull":
-            score -= 15
-            factors.append("choch_against_short")
+        if direction == "long" and kind in ("choch_bear", "mss_bear"):
+            score -= 20 if kind == "mss_bear" else 15
+            factors.append("mss_against_long" if kind == "mss_bear" else "choch_against_long")
+        if direction == "short" and kind in ("choch_bull", "mss_bull"):
+            score -= 20 if kind == "mss_bull" else 15
+            factors.append("mss_against_short" if kind == "mss_bull" else "choch_against_short")
 
     box = (range_ctx or {}).get("box") or {}
     play = (range_ctx or {}).get("recommended_play") or {}
@@ -143,6 +144,78 @@ def score_confluence(
                 score += 6
                 factors.append("bearish_imbalance_stack")
 
+        # Range deviation factor
+        deviation = (range_ctx or {}).get("deviation")
+        if deviation:
+            if direction == "long" and deviation.get("play") == "sweep_fade_long":
+                score += 18
+                factors.append("range_deviation_long")
+            elif direction == "short" and deviation.get("play") == "sweep_fade_short":
+                score += 18
+                factors.append("range_deviation_short")
+
+    # Swing leg Premium / Discount & OTE checks
+    swing_leg = (range_ctx or {}).get("swing_leg")
+    if swing_leg and swing_leg.get("active"):
+        zone = swing_leg.get("zone")
+        if direction == "long" and zone == "premium":
+            score -= 20.0
+            factors.append("chasing_in_premium")
+        elif direction == "short" and zone == "discount":
+            score -= 20.0
+            factors.append("chasing_in_discount")
+            
+        fibs = swing_leg.get("fib_levels") or {}
+        if fibs:
+            if direction == "long":
+                ote_low = float(fibs.get("ote_long_low", 0))
+                ote_high = float(fibs.get("ote_long_high", 0))
+                if ote_low <= close <= ote_high:
+                    score += 15.0
+                    factors.append("swing_ote_discount_long")
+            else:
+                ote_low = float(fibs.get("ote_short_low", 0))
+                ote_high = float(fibs.get("ote_short_high", 0))
+                if ote_low <= close <= ote_high:
+                    score += 15.0
+                    factors.append("swing_ote_premium_short")
+
+    # General BSL/SSL Sweep rewards
+    sweeps = (range_ctx or {}).get("sweeps")
+    if sweeps:
+        if direction == "long" and sweeps.get("ssl_sweep"):
+            score += 18.0
+            factors.append("ssl_liquidity_sweep")
+        elif direction == "short" and sweeps.get("bsl_sweep"):
+            score += 18.0
+            factors.append("bsl_liquidity_sweep")
+
+    if block_ctx:
+        obs = block_ctx.get("order_blocks") or {}
+        bbs = block_ctx.get("breaker_blocks") or {}
+        if direction == "long":
+            for ob in obs.get("bullish") or []:
+                if _near_level(close, float(ob["mid"]), 0.015):
+                    score += 15
+                    factors.append("near_bullish_ob")
+                    break
+            for bb in bbs.get("bullish") or []:
+                if _near_level(close, float(bb["mid"]), 0.015):
+                    score += 12
+                    factors.append("near_bullish_breaker")
+                    break
+        else:
+            for ob in obs.get("bearish") or []:
+                if _near_level(close, float(ob["mid"]), 0.015):
+                    score += 15
+                    factors.append("near_bearish_ob")
+                    break
+            for bb in bbs.get("bearish") or []:
+                if _near_level(close, float(bb["mid"]), 0.015):
+                    score += 12
+                    factors.append("near_bearish_breaker")
+                    break
+
     if indicator_signals is not None:
         from .technical_signals import confluence_adjustment
 
@@ -172,8 +245,9 @@ def build_setup_candidates(
     max_entry_chase_atr: float = 1.5,
     fvg_objs: list[Any] | None = None,
     range_ctx: dict[str, Any] | None = None,
+    block_ctx: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """Ranked setup candidates for one direction."""
+    """Ranked setup candidates for one direction, incorporating OBs, Breakers, and Range Deviations."""
     box = (range_ctx or {}).get("box") or {}
     range_active = bool(box.get("active"))
     if direction == "long" and structure == "bearish" and not range_active:
@@ -420,6 +494,213 @@ def build_setup_candidates(
                     "targets": [round(rl - (rh - rl), 8)],
                     "priority": 78,
                     "rationale": "Breakout below range low — retest short.",
+                })
+
+    # 5) Order Block & Breaker Block setups
+    if block_ctx:
+        obs = block_ctx.get("order_blocks") or {}
+        bbs = block_ctx.get("breaker_blocks") or {}
+
+        if direction == "long":
+            for ob in obs.get("bullish") or []:
+                ob_mid = float(ob["mid"])
+                ob_bot = float(ob["bottom"])
+                if _near_level(close, ob_mid, 0.025) and ob_bot < close:
+                    stop = ob_bot - atr_stop * 0.5
+                    if _chase_ok(ob_mid) and stop < ob_mid:
+                        candidates.append({
+                            "setup_type": "ob_retest_long",
+                            "direction": "long",
+                            "entry": round(ob_mid, 8),
+                            "entry_style": "limit_ob_mid",
+                            "stop": round(stop, 8),
+                            "targets": [round(r["price"], 8) for r in resistances[:2]] or [round(close + (ob_mid - stop) * 2.0, 8)],
+                            "priority": 92,
+                            "rationale": f"Bullish OB retest at {ob_mid:.4f} (OB formed at bar {ob['index']}).",
+                        })
+            for bb in bbs.get("bullish") or []:
+                bb_mid = float(bb["mid"])
+                bb_bot = float(bb["bottom"])
+                if _near_level(close, bb_mid, 0.025) and bb_bot < close:
+                    stop = bb_bot - atr_stop * 0.5
+                    if _chase_ok(bb_mid) and stop < bb_mid:
+                        candidates.append({
+                            "setup_type": "breaker_retest_long",
+                            "direction": "long",
+                            "entry": round(bb_mid, 8),
+                            "entry_style": "limit_breaker_mid",
+                            "stop": round(stop, 8),
+                            "targets": [round(r["price"], 8) for r in resistances[:2]] or [round(close + (bb_mid - stop) * 2.0, 8)],
+                            "priority": 88,
+                            "rationale": f"Bullish Breaker retest support at {bb_mid:.4f}.",
+                        })
+        else:
+            for ob in obs.get("bearish") or []:
+                ob_mid = float(ob["mid"])
+                ob_top = float(ob["top"])
+                if _near_level(close, ob_mid, 0.025) and ob_top > close:
+                    stop = ob_top + atr_stop * 0.5
+                    if _chase_ok(ob_mid) and stop > ob_mid:
+                        candidates.append({
+                            "setup_type": "ob_retest_short",
+                            "direction": "short",
+                            "entry": round(ob_mid, 8),
+                            "entry_style": "limit_ob_mid",
+                            "stop": round(stop, 8),
+                            "targets": [round(s["price"], 8) for s in supports[:2]] or [round(close - (stop - ob_mid) * 2.0, 8)],
+                            "priority": 92,
+                            "rationale": f"Bearish OB retest at {ob_mid:.4f} (OB formed at bar {ob['index']}).",
+                        })
+            for bb in bbs.get("bearish") or []:
+                bb_mid = float(bb["mid"])
+                bb_top = float(bb["top"])
+                if _near_level(close, bb_mid, 0.025) and bb_top > close:
+                    stop = bb_top + atr_stop * 0.5
+                    if _chase_ok(bb_mid) and stop > bb_mid:
+                        candidates.append({
+                            "setup_type": "breaker_retest_short",
+                            "direction": "short",
+                            "entry": round(bb_mid, 8),
+                            "entry_style": "limit_breaker_mid",
+                            "stop": round(stop, 8),
+                            "targets": [round(s["price"], 8) for s in supports[:2]] or [round(close - (stop - bb_mid) * 2.0, 8)],
+                            "priority": 88,
+                            "rationale": f"Bearish Breaker retest resistance at {bb_mid:.4f}.",
+                        })
+
+    # 6) Market Structure Shift Setup
+    struct_evs = range_ctx.get("structure_events") if range_ctx else []
+    for ev in struct_evs or []:
+        kind = ev.get("kind")
+        level = float(ev.get("level") or 0)
+        if direction == "long" and kind == "mss_bull":
+            stop = last_swing_low or (close - (atr_val or close * 0.01) * 2.0)
+            candidates.append({
+                "setup_type": "mss_retest_long",
+                "direction": "long",
+                "entry": round(close, 8),
+                "entry_style": "market_mss",
+                "stop": round(stop, 8),
+                "targets": [round(r["price"], 8) for r in resistances[:2]] or [round(close + (close - stop) * 2.0, 8)],
+                "priority": 90,
+                "rationale": f"Bullish Market Structure Shift (MSS) above {level:.4f} with displacement.",
+            })
+        if direction == "short" and kind == "mss_bear":
+            stop = last_swing_high or (close + (atr_val or close * 0.01) * 2.0)
+            candidates.append({
+                "setup_type": "mss_retest_short",
+                "direction": "short",
+                "entry": round(close, 8),
+                "entry_style": "market_mss",
+                "stop": round(stop, 8),
+                "targets": [round(s["price"], 8) for s in supports[:2]] or [round(close - (stop - close) * 2.0, 8)],
+                "priority": 90,
+                "rationale": f"Bearish Market Structure Shift (MSS) below {level:.4f} with displacement.",
+            })
+
+    # 7) Swing Leg Fibonacci OTE Setup
+    swing_leg = (range_ctx or {}).get("swing_leg")
+    if swing_leg and swing_leg.get("active"):
+        fibs = swing_leg.get("fib_levels") or {}
+        if fibs:
+            if direction == "long":
+                entry = float(fibs["ote_long_high"])
+                stop = float(fibs["0.0"]) - atr_stop * 0.5
+                if _chase_ok(entry) and stop < entry:
+                    candidates.append({
+                        "setup_type": "ote_retest_long",
+                        "direction": "long",
+                        "entry": round(entry, 8),
+                        "entry_style": "limit_ote_high",
+                        "stop": round(stop, 8),
+                        "targets": [round(float(fibs["1.0"]), 8)],
+                        "priority": 93,
+                        "rationale": f"Bullish OTE Fibonacci Retracement at {entry:.4f}.",
+                    })
+            else:
+                entry = float(fibs["ote_short_low"])
+                stop = float(fibs["1.0"]) + atr_stop * 0.5
+                if _chase_ok(entry) and stop > entry:
+                    candidates.append({
+                        "setup_type": "ote_retest_short",
+                        "direction": "short",
+                        "entry": round(entry, 8),
+                        "entry_style": "limit_ote_low",
+                        "stop": round(stop, 8),
+                        "targets": [round(float(fibs["0.0"]), 8)],
+                        "priority": 93,
+                        "rationale": f"Bearish OTE Fibonacci Retracement at {entry:.4f}.",
+                    })
+
+    # 8) General BSL/SSL Sweep Reversal Setup
+    sweeps = (range_ctx or {}).get("sweeps")
+    if sweeps:
+        if direction == "long" and sweeps.get("ssl_sweep"):
+            sw = sweeps["ssl_sweep"]
+            entry = close
+            stop = float(sw["extreme"]) - atr_stop * 0.5
+            if stop < entry:
+                candidates.append({
+                    "setup_type": "ssl_sweep_long",
+                    "direction": "long",
+                    "entry": round(entry, 8),
+                    "entry_style": "market_sweep",
+                    "stop": round(stop, 8),
+                    "targets": [round(float(last_swing_high or entry * 1.02), 8)],
+                    "priority": 94,
+                    "rationale": f"SSL Liquidity Sweep detected at {sw['level']:.4f} (extreme {sw['extreme']:.4f}). Reversal long.",
+                })
+        if direction == "short" and sweeps.get("bsl_sweep"):
+            sw = sweeps["bsl_sweep"]
+            entry = close
+            stop = float(sw["extreme"]) + atr_stop * 0.5
+            if stop > entry:
+                candidates.append({
+                    "setup_type": "bsl_sweep_short",
+                    "direction": "short",
+                    "entry": round(entry, 8),
+                    "entry_style": "market_sweep",
+                    "stop": round(stop, 8),
+                    "targets": [round(float(last_swing_low or entry * 0.98), 8)],
+                    "priority": 94,
+                    "rationale": f"BSL Liquidity Sweep detected at {sw['level']:.4f} (extreme {sw['extreme']:.4f}). Reversal short.",
+                })
+
+    # 9) Range Deviation Setup
+    deviation = (range_ctx or {}).get("deviation")
+    if deviation:
+        rh = float(box.get("range_high") or close)
+        rl = float(box.get("range_low") or close)
+        rmid = float(box.get("range_mid") or close)
+        pad = max(atr_val or close * 0.004, (rh - rl) * 0.06)
+
+        if direction == "long" and deviation.get("play") == "sweep_fade_long":
+            entry = rl
+            stop = float(deviation.get("extreme_price") or rl) - pad * 0.5
+            if stop < entry:
+                candidates.append({
+                    "setup_type": "range_deviation_long",
+                    "direction": "long",
+                    "entry": round(entry, 8),
+                    "entry_style": "liquidity_sweep",
+                    "stop": round(stop, 8),
+                    "targets": [round(rmid, 8), round(rh, 8)],
+                    "priority": 96,
+                    "rationale": f"Range deviation low reclaimed {rl:.4f}. Fading back inside range.",
+                })
+        if direction == "short" and deviation.get("play") == "sweep_fade_short":
+            entry = rh
+            stop = float(deviation.get("extreme_price") or rh) + pad * 0.5
+            if stop > entry:
+                candidates.append({
+                    "setup_type": "range_deviation_short",
+                    "direction": "short",
+                    "entry": round(entry, 8),
+                    "entry_style": "liquidity_sweep",
+                    "stop": round(stop, 8),
+                    "targets": [round(rmid, 8), round(rl, 8)],
+                    "priority": 96,
+                    "rationale": f"Range deviation high rejected above {rh:.4f}. Fading back inside range.",
                 })
 
     # Fallback market

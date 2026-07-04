@@ -51,6 +51,17 @@ PA_FVG_LINE: dict[str, Any] = {
     "fontsize": 10,
 }
 
+PA_FVG_BOX: dict[str, Any] = {
+    "backgroundColor": "#7E57C2",
+    "backgroundTransparency": 85,
+    "borderColor": "#5E35B1",
+    "linewidth": 1,
+    "linestyle": 2,
+    "showLabel": True,
+    "textcolor": "#EDE7F6",
+    "fontsize": 10,
+}
+
 PA_RESIST_LINE: dict[str, Any] = {
     "linecolor": "#FF7043",
     "linewidth": 2,
@@ -128,6 +139,102 @@ POSITION_SHORT: dict[str, Any] = {
     "stopBackgroundTransparency": 72,
     "linecolor": "#EF5350",
     "linewidth": 2,
+}
+
+
+# PA Order Block box styles
+PA_OB_BULL_BOX: dict[str, Any] = {
+    "backgroundColor": "#2E7D32",
+    "backgroundTransparency": 85,
+    "borderColor": "#4CAF50",
+    "linewidth": 1,
+    "linestyle": 0,
+    "showLabel": True,
+    "textcolor": "#E8F5E9",
+    "fontsize": 10,
+}
+
+PA_OB_BEAR_BOX: dict[str, Any] = {
+    "backgroundColor": "#C62828",
+    "backgroundTransparency": 85,
+    "borderColor": "#EF5350",
+    "linewidth": 1,
+    "linestyle": 0,
+    "showLabel": True,
+    "textcolor": "#FFEBEE",
+    "fontsize": 10,
+}
+
+# PA Breaker Block box styles
+PA_BREAKER_BULL_BOX: dict[str, Any] = {
+    "backgroundColor": "#1565C0",
+    "backgroundTransparency": 85,
+    "borderColor": "#2196F3",
+    "linewidth": 1,
+    "linestyle": 2,
+    "showLabel": True,
+    "textcolor": "#E3F2FD",
+    "fontsize": 10,
+}
+
+PA_BREAKER_BEAR_BOX: dict[str, Any] = {
+    "backgroundColor": "#EF6C00",
+    "backgroundTransparency": 85,
+    "borderColor": "#FF9800",
+    "linewidth": 1,
+    "linestyle": 2,
+    "showLabel": True,
+    "textcolor": "#FFF3E0",
+    "fontsize": 10,
+}
+
+# PA Structure line styles
+PA_BOS_LINE: dict[str, Any] = {
+    "linecolor": "#78909C",
+    "linewidth": 1,
+    "linestyle": 2,
+    "showLabel": True,
+    "textcolor": "#CFD8DC",
+    "fontsize": 9,
+}
+
+PA_CHOCH_LINE: dict[str, Any] = {
+    "linecolor": "#AB47BC",
+    "linewidth": 1,
+    "linestyle": 2,
+    "showLabel": True,
+    "textcolor": "#F3E5F5",
+    "fontsize": 9,
+}
+
+PA_MSS_LINE: dict[str, Any] = {
+    "linecolor": "#FFCA28",
+    "linewidth": 1,
+    "linestyle": 1,
+    "showLabel": True,
+    "textcolor": "#FFF8E1",
+    "fontsize": 10,
+}
+
+
+PA_SWING_OTE_BOX: dict[str, Any] = {
+    "backgroundColor": "#FFD54F",
+    "backgroundTransparency": 90,
+    "borderColor": "#FFB300",
+    "linewidth": 1,
+    "linestyle": 2,
+    "showLabel": True,
+    "textcolor": "#FFEB3B",
+    "fontsize": 9,
+}
+
+PA_SWEEP_LINE: dict[str, Any] = {
+    "linecolor": "#E91E63",
+    "linewidth": 1,
+    "linestyle": 2,
+    "showLabel": True,
+    "textcolor": "#F8BBD0",
+    "fontsize": 9,
 }
 
 

@@ -507,14 +507,24 @@ def apply_pa_overlay_to_chart(
     from .chart_drawing_styles import (
         PA_BANNER_TEXT,
         PA_FVG_LINE,
+        PA_FVG_BOX,
         PA_RANGE_HIGH,
         PA_RANGE_LOW,
         PA_RANGE_MID,
         PA_RESIST_LINE,
         PA_SUPPORT_LINE,
+        PA_OB_BULL_BOX,
+        PA_OB_BEAR_BOX,
+        PA_BREAKER_BULL_BOX,
+        PA_BREAKER_BEAR_BOX,
+        PA_BOS_LINE,
+        PA_CHOCH_LINE,
+        PA_MSS_LINE,
+        PA_SWING_OTE_BOX,
+        PA_SWEEP_LINE,
         overrides_json,
     )
-    from .tv_tools import tv_draw_horizontal_line, tv_draw_text
+    from .tv_tools import tv_draw_horizontal_line, tv_draw_rectangle, tv_draw_text
 
     ltf_pa = mtf.get("ltf_analysis") or {}
     if not ltf_times and not ltf_closes:
@@ -556,11 +566,16 @@ def apply_pa_overlay_to_chart(
         rh = float(range_box["range_high"])
         rl = float(range_box["range_low"])
         rm = float(range_box.get("range_mid") or (rh + rl) / 2)
-        for px, lbl, style in (
-            (rh, "RNG H", PA_RANGE_HIGH),
-            (rl, "RNG L", PA_RANGE_LOW),
-            (rm, "EQ", PA_RANGE_MID),
-        ):
+        width = rh - rl
+        
+        levels_to_draw = [
+            (rh, "RNG H (1.0)", PA_RANGE_HIGH),
+            (rl + width * 0.75, "0.75 Fib", PA_RANGE_MID),
+            (rm, "EQ (0.50)", PA_RANGE_MID),
+            (rl + width * 0.25, "0.25 Fib", PA_RANGE_MID),
+            (rl, "RNG L (0.0)", PA_RANGE_LOW),
+        ]
+        for px, lbl, style in levels_to_draw:
             out["levels"].append(
                 tv_draw_horizontal_line(
                     t_anchor, px, text=lbl, overrides=overrides_json(style)
@@ -586,27 +601,162 @@ def apply_pa_overlay_to_chart(
 
     def _draw_fvg_zone(top: float, bot: float, label: str) -> None:
         mid = (top + bot) / 2
-        for px, lbl in ((top, f"{label} top"), (bot, f"{label} bot")):
-            out["levels"].append(
-                tv_draw_horizontal_line(
-                    t_anchor, px, overrides=overrides_json(PA_FVG_LINE)
+        dt_span = 3600 * 20
+        if ltf_times and len(ltf_times) >= 20:
+            dt_span = t_anchor - int(ltf_times[-20])
+            
+        time_start = t_anchor - dt_span
+        res = tv_draw_rectangle(
+            time_start,
+            top,
+            t_anchor,
+            bot,
+            overrides=overrides_json(PA_FVG_BOX),
+        )
+        # Fallback to horizontal lines if rectangle drawing is not supported or failed
+        if not res.get("success"):
+            for px, lbl in ((top, f"{label} top"), (bot, f"{label} bot")):
+                out["levels"].append(
+                    tv_draw_horizontal_line(
+                        t_anchor, px, overrides=overrides_json(PA_FVG_LINE)
+                    )
+                )
+                time.sleep(0.06)
+            out["labels"].append(
+                tv_draw_text(
+                    t_anchor,
+                    mid,
+                    f"{label} ZONE",
+                    overrides=overrides_json(PA_FVG_LINE),
                 )
             )
-            time.sleep(0.06)
-        out["labels"].append(
-            tv_draw_text(
-                t_anchor,
-                mid,
-                f"{label} ZONE",
-                overrides=overrides_json(PA_FVG_LINE),
+        else:
+            out["levels"].append(res)
+            out["labels"].append(
+                tv_draw_text(
+                    t_anchor,
+                    mid,
+                    f"{label} ZONE",
+                    overrides=overrides_json(PA_FVG_BOX),
+                )
             )
+
+    def _draw_box_zone(top: float, bot: float, label: str, style_dict: dict[str, Any]) -> None:
+        mid = (top + bot) / 2
+        dt_span = 3600 * 20
+        if ltf_times and len(ltf_times) >= 20:
+            dt_span = t_anchor - int(ltf_times[-20])
+        time_start = t_anchor - dt_span
+        res = tv_draw_rectangle(
+            time_start,
+            top,
+            t_anchor,
+            bot,
+            overrides=overrides_json(style_dict),
         )
+        if not res.get("success"):
+            for px, lbl in ((top, f"{label} top"), (bot, f"{label} bot")):
+                out["levels"].append(
+                    tv_draw_horizontal_line(
+                        t_anchor, px, overrides=overrides_json(style_dict)
+                    )
+                )
+                time.sleep(0.06)
+            out["labels"].append(
+                tv_draw_text(
+                    t_anchor,
+                    mid,
+                    f"{label} ZONE",
+                    overrides=overrides_json(style_dict),
+                )
+            )
+        else:
+            out["levels"].append(res)
+            out["labels"].append(
+                tv_draw_text(
+                    t_anchor,
+                    mid,
+                    f"{label}",
+                    overrides=overrides_json(style_dict),
+                )
+            )
 
     if not minimal:
         for z in (fvg_sum.get("open_bullish_zones") or [])[:1]:
             _draw_fvg_zone(float(z["top"]), float(z["bottom"]), "FVG↑")
         for z in (fvg_sum.get("open_bearish_zones") or [])[:1]:
             _draw_fvg_zone(float(z["top"]), float(z["bottom"]), "FVG↓")
+
+        # Draw Order Blocks
+        obs = ltf_pa.get("order_blocks") or {}
+        for ob in (obs.get("bullish") or [])[:1]:
+            _draw_box_zone(float(ob["top"]), float(ob["bottom"]), "OB Bull", PA_OB_BULL_BOX)
+        for ob in (obs.get("bearish") or [])[:1]:
+            _draw_box_zone(float(ob["top"]), float(ob["bottom"]), "OB Bear", PA_OB_BEAR_BOX)
+
+        # Draw Breaker Blocks
+        bbs = ltf_pa.get("breaker_blocks") or {}
+        for bb in (bbs.get("bullish") or [])[:1]:
+            _draw_box_zone(float(bb["top"]), float(bb["bottom"]), "BB Bull", PA_BREAKER_BULL_BOX)
+        for bb in (bbs.get("bearish") or [])[:1]:
+            _draw_box_zone(float(bb["top"]), float(bb["bottom"]), "BB Bear", PA_BREAKER_BEAR_BOX)
+
+        # Draw Market Structure Lines
+        events = ltf_pa.get("structure_events") or []
+        for ev in events[-2:]:
+            kind = ev.get("kind")
+            level = float(ev.get("level") or 0)
+            if level <= 0:
+                continue
+            if "bos" in kind:
+                style = PA_BOS_LINE
+                lbl = f"BOS ({kind.split('_')[-1].upper()})"
+            elif "choch" in kind:
+                style = PA_CHOCH_LINE
+                lbl = f"CHoCH ({kind.split('_')[-1].upper()})"
+            else:
+                style = PA_MSS_LINE
+                lbl = f"MSS ({kind.split('_')[-1].upper()})"
+            line = tv_draw_horizontal_line(
+                t_anchor, level, text=lbl, overrides=overrides_json(style)
+            )
+            out["levels"].append(line)
+            time.sleep(0.08)
+
+        # Draw Swing OTE box
+        swing_leg = ltf_pa.get("swing_leg") or {}
+        if swing_leg.get("active"):
+            fibs = swing_leg.get("fib_levels") or {}
+            structure_dir = ltf_pa.get("market_structure")
+            if structure_dir in ("bullish", "transition"):
+                ote_top = float(fibs.get("ote_long_high", 0))
+                ote_bot = float(fibs.get("ote_long_low", 0))
+                lbl = "Swing OTE (Buy)"
+            else:
+                ote_top = float(fibs.get("ote_short_high", 0))
+                ote_bot = float(fibs.get("ote_short_low", 0))
+                lbl = "Swing OTE (Sell)"
+            if ote_top > ote_bot:
+                _draw_box_zone(ote_top, ote_bot, lbl, PA_SWING_OTE_BOX)
+
+        # Draw BSL/SSL Sweep Lines
+        sweeps = ltf_pa.get("sweeps") or {}
+        bsl = sweeps.get("bsl_sweep")
+        if bsl:
+            px = float(bsl["level"])
+            line = tv_draw_horizontal_line(
+                t_anchor, px, text=f"BSL SWEEP ({bsl['extreme']:.4f})", overrides=overrides_json(PA_SWEEP_LINE)
+            )
+            out["levels"].append(line)
+            time.sleep(0.08)
+        ssl = sweeps.get("ssl_sweep")
+        if ssl:
+            px = float(ssl["level"])
+            line = tv_draw_horizontal_line(
+                t_anchor, px, text=f"SSL SWEEP ({ssl['extreme']:.4f})", overrides=overrides_json(PA_SWEEP_LINE)
+            )
+            out["levels"].append(line)
+            time.sleep(0.08)
 
     if minimal:
         banner = (

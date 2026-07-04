@@ -19,16 +19,46 @@ BIST_HOLIDAYS: frozenset[str] = frozenset(
         "2025-06-06",
         "2025-07-15",
         "2025-08-30",
-        "2025-10-28",
         "2025-10-29",
         "2026-01-01",
+        "2026-03-20",
+        "2026-03-21",
+        "2026-03-22",
         "2026-04-23",
         "2026-05-01",
         "2026-05-19",
+        "2026-05-27",
+        "2026-05-28",
+        "2026-05-29",
+        "2026-05-30",
         "2026-07-15",
         "2026-08-30",
-        "2026-10-28",
         "2026-10-29",
+        "2027-01-01",
+        "2027-03-10",
+        "2027-03-11",
+        "2027-03-12",
+        "2027-04-23",
+        "2027-05-01",
+        "2027-05-17",
+        "2027-05-18",
+        "2027-05-19",
+        "2027-05-20",
+        "2027-07-15",
+        "2027-08-30",
+        "2027-10-29",
+    }
+)
+
+BIST_HALF_DAYS: frozenset[str] = frozenset(
+    {
+        "2025-10-28",
+        "2026-03-19",
+        "2026-05-26",
+        "2026-10-28",
+        "2027-03-09",
+        "2027-05-16",
+        "2027-10-28",
     }
 )
 
@@ -37,8 +67,18 @@ def is_bist_holiday(unix_ts: int) -> bool:
     try:
         d = datetime.fromtimestamp(int(unix_ts), tz=ZoneInfo("Europe/Istanbul")).date()
     except Exception:
-        d = datetime.fromtimestamp(int(unix_ts), timezone.utc).date()
+        import datetime as dt
+        d = datetime.fromtimestamp(int(unix_ts), dt.timezone.utc).date()
     return d.isoformat() in BIST_HOLIDAYS
+
+
+def is_bist_half_day(unix_ts: int) -> bool:
+    try:
+        d = datetime.fromtimestamp(int(unix_ts), tz=ZoneInfo("Europe/Istanbul")).date()
+    except Exception:
+        import datetime as dt
+        d = datetime.fromtimestamp(int(unix_ts), dt.timezone.utc).date()
+    return d.isoformat() in BIST_HALF_DAYS
 
 
 def filter_holiday_bars(
@@ -74,4 +114,4 @@ def filter_holiday_bars(
     }
 
 
-__all__ = ["BIST_HOLIDAYS", "is_bist_holiday", "filter_holiday_bars"]
+__all__ = ["BIST_HOLIDAYS", "BIST_HALF_DAYS", "is_bist_holiday", "is_bist_half_day", "filter_holiday_bars"]

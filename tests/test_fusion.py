@@ -1,7 +1,19 @@
 """Fundamental–technical fusion unit tests (offline)."""
 
 from bist_trader_mcp.fundamental_score import score_from_enrich
+from bist_trader_mcp.fundamental_statements import analyze_financials, to_fusion_entry
 from bist_trader_mcp.fundamental_technical_fusion import fuse_fundamental_technical
+
+
+def _long_technical():
+    return {
+        "trade_candidate": True,
+        "confidence": {"score": 78, "grade": "B"},
+        "mtf": {"aligned_direction": "long", "conflict": False},
+        "primary_scenario": {"direction": "long"},
+        "data_quality": {"flag": "ok"},
+        "elliott_mtf": {},
+    }
 
 
 def test_fundamental_score_negative_kap():
@@ -79,6 +91,63 @@ def test_fusion_blocks_elliott_htf_ltf_conflict():
     assert out["trade_allowed"] is False
     assert "elliott_htf_ltf_conflict" in out["warnings"]
     assert out["block_reason"] == "fusion_elliott_conflict"
+
+
+# --- D: statement-based CFO engine wired into fusion ----------------------
+
+
+def test_statement_score_preferred_over_yahoo_ratios():
+    # Yahoo ratio pack says bearish, but the deeper statement analysis says
+    # strongly bullish — the statement core must win.
+    pack = score_from_enrich({
+        "fetched": {
+            "fundamental_ratios_score": {"available": True, "score": -40, "grade": "F"},
+            "financial_statements_score": {
+                "available": True, "score": 60, "grade": "A", "factors": ["strong_roe"],
+                "red_flags": [],
+            },
+        }
+    })
+    assert pack["core_source"] == "statements"
+    assert pack["score"] > 0
+    assert pack["ratio_grade"] == "A"
+
+
+def test_fusion_red_flag_blocks_long():
+    enrich = {
+        "fetched": {
+            "financial_statements_score": {
+                "available": True, "score": 40, "grade": "B",
+                "red_flags": ["earnings_manipulation"],
+            }
+        }
+    }
+    out = fuse_fundamental_technical(
+        technical=_long_technical(),
+        trade_result={"approved": True, "plan": {"direction": "long"}},
+        fund_enrich=enrich,
+        symbol_check={"ok": True},
+    )
+    assert out["trade_allowed"] is False
+    assert "fundamental_red_flag" in out["warnings"]
+    assert out["block_reason"] == "fusion_fundamental_red_flag"
+
+
+def test_to_fusion_entry_roundtrips_into_score():
+    # End-to-end: real engine output → adapter → fusion fundamental score.
+    analysis = analyze_financials(
+        {"period_end": "2023-12-31", "is_inflation_adjusted": True,
+         "revenue": 1250, "cogs": 720, "operating_income": 340, "net_income": 258,
+         "total_assets": 1350, "current_assets": 700, "cash": 300,
+         "current_liabilities": 300, "total_equity": 870, "retained_earnings": 600,
+         "total_liabilities": 480, "operating_cash_flow": 300, "capex": 70},
+        ticker="GOOD",
+    )
+    entry = to_fusion_entry(analysis)
+    assert entry["available"] is True
+    pack = score_from_enrich({"fetched": {"financial_statements_score": entry}})
+    assert pack["core_source"] == "statements"
+    assert pack["has_ratios"] is True
 
 
 def test_fusion_dynamic_weights_and_scaling():

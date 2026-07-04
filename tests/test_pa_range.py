@@ -84,3 +84,21 @@ def test_analyze_price_action_has_range_and_imbalances():
     assert "range" in out
     assert "imbalances" in out
     assert "range_trade" in out
+
+
+def test_detect_range_deviation_low():
+    from bist_trader_mcp.pa_range import detect_trading_range, detect_range_deviation
+
+    c, h, l = _oscillating_range(48)
+    box = detect_trading_range(h, l, c, atr_val=2.0, window=40)
+    
+    # Trigger a deviation low: price dips below range low, then closes back inside on last bar
+    l[-2] = box["range_low"] - 1.5
+    c[-2] = box["range_low"] - 0.5
+    l[-1] = box["range_low"] - 0.2
+    c[-1] = box["range_low"] + 0.3
+    
+    deviation = detect_range_deviation(h, l, c, box)
+    assert deviation is not None
+    assert deviation["kind"] == "deviation_low"
+    assert deviation["play"] == "sweep_fade_long"
