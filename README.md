@@ -1,5 +1,7 @@
 # BIST Trader MCP
 
+[![Verified on MseeP](https://mseep.ai/badge.svg)](https://mseep.ai/app/219ae973-af4d-490e-a059-e8ac4f20c7bf)
+
 [![pytest](https://img.shields.io/badge/pytest-304%20passed-success)](https://github.com/Enesp4rl4k/bist-trader-mcp)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
