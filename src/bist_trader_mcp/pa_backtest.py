@@ -19,10 +19,12 @@ Pure math — feed bars from TradingView (``tv_fetch_ohlcv``) or any OHLCV sourc
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from typing import Any
 
 from .factor_eval import quantile_spread, rank_ic
 from .pa_simple import simple_price_action
+from .pa_weights import use_weights
 from .performance import trade_statistics
 
 
@@ -163,8 +165,44 @@ def backtest_simple_pa(
     min_rr: float = 1.5,
     cost_pct: float = 0.002,
     min_trades: int = 30,
+    weights: dict[str, Any] | None = None,
+    use_saved_weights: bool = False,
 ) -> dict[str, Any]:
-    """Walk-forward test of ``simple_price_action`` AL/SAT plans."""
+    """Walk-forward test of ``simple_price_action`` AL/SAT plans.
+
+    By default learned weights are *disabled* so the baseline engine is measured.
+    Pass ``weights`` (a pa_weights document) to test a candidate set, or
+    ``use_saved_weights=True`` to test whatever is saved and active on disk.
+    """
+    if weights is not None:
+        ctx = use_weights(weights)
+    elif use_saved_weights:
+        ctx = nullcontext()
+    else:
+        ctx = use_weights(None)
+    with ctx:
+        return _run_backtest(
+            opens, highs, lows, closes, dates=dates, warmup=warmup, step=step,
+            max_hold=max_hold, fill_window=fill_window, min_rr=min_rr,
+            cost_pct=cost_pct, min_trades=min_trades,
+        )
+
+
+def _run_backtest(
+    opens: list[float],
+    highs: list[float],
+    lows: list[float],
+    closes: list[float],
+    *,
+    dates: list[Any] | None,
+    warmup: int,
+    step: int,
+    max_hold: int,
+    fill_window: int,
+    min_rr: float,
+    cost_pct: float,
+    min_trades: int,
+) -> dict[str, Any]:
     n = len(closes)
     if not (n == len(opens) == len(highs) == len(lows)):
         raise ValueError("opens, highs, lows, closes must be equal length")

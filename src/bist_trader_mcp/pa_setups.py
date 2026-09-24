@@ -40,46 +40,46 @@ def score_confluence(
     """0–100 confluence for a direction."""
     score = 40.0
     factors: list[str] = []
+    from .pa_weights import factor_weight
+
+    def add(name: str, pts: float) -> None:
+        # Learned multiplier: 0 silences a factor that lost money in backtests.
+        nonlocal score
+        score += pts * factor_weight(name)
+        factors.append(name)
 
     if direction == "long":
         if structure == "bullish":
-            score += 22
-            factors.append("bullish_structure")
+            add("bullish_structure", 22)
         elif structure == "transition":
             score += 8
         elif structure == "bearish":
             score -= 25
         if supports and _near_level(close, float(supports[0]["price"]), 0.015):
-            score += 18
-            factors.append("near_support")
+            add("near_support", 18)
         if resistances:
             room = float(resistances[0]["price"]) - close
             if close > 0 and room / close > 0.01:
-                score += 10
-                factors.append("room_to_resistance")
+                add("room_to_resistance", 10)
     else:
         if structure == "bearish":
-            score += 22
-            factors.append("bearish_structure")
+            add("bearish_structure", 22)
         elif structure == "transition":
             score += 8
         elif structure == "bullish":
             score -= 25
         if resistances and _near_level(close, float(resistances[0]["price"]), 0.015):
-            score += 18
-            factors.append("near_resistance")
+            add("near_resistance", 18)
         if supports:
             room = close - float(supports[0]["price"])
             if close > 0 and room / close > 0.01:
-                score += 10
-                factors.append("room_to_support")
+                add("room_to_support", 10)
 
     if volumes and len(volumes) >= 5:
         avg = sum(float(v) for v in volumes[-20:]) / min(20, len(volumes))
         last = float(volumes[-1])
         if avg > 0 and last >= avg * 1.15:
-            score += 8
-            factors.append("volume_expansion")
+            add("volume_expansion", 8)
 
     if fvg_objs:
         from .pa_imbalances import nearest_fvg_for_direction
@@ -87,26 +87,22 @@ def score_confluence(
         zone = nearest_fvg_for_direction(fvg_objs, close, direction)
         if zone:
             if zone.status in ("open", "partial"):
-                score += 14
-                factors.append(f"fvg_{zone.direction}_in_zone")
+                add(f"fvg_{zone.direction}_in_zone", 14)
             elif zone.status == "inverted":
-                score += 12
-                factors.append(f"ifvg_{zone.ifvg_side}")
+                add(f"ifvg_{zone.ifvg_side}", 12)
 
     for ev in structure_events or []:
         kind = ev.get("kind")
         if direction == "long" and kind in ("bos_bull", "choch_bull", "mss_bull"):
-            score += 15 if kind == "mss_bull" else 10
-            factors.append(kind)
+            add(kind, 15 if kind == "mss_bull" else 10)
         if direction == "short" and kind in ("bos_bear", "choch_bear", "mss_bear"):
-            score += 15 if kind == "mss_bear" else 10
-            factors.append(kind)
+            add(kind, 15 if kind == "mss_bear" else 10)
         if direction == "long" and kind in ("choch_bear", "mss_bear"):
-            score -= 20 if kind == "mss_bear" else 15
-            factors.append("mss_against_long" if kind == "mss_bear" else "choch_against_long")
+            name = "mss_against_long" if kind == "mss_bear" else "choch_against_long"
+            add(name, -(20 if kind == "mss_bear" else 15))
         if direction == "short" and kind in ("choch_bull", "mss_bull"):
-            score -= 20 if kind == "mss_bull" else 15
-            factors.append("mss_against_short" if kind == "mss_bull" else "choch_against_short")
+            name = "mss_against_short" if kind == "mss_bull" else "choch_against_short"
+            add(name, -(20 if kind == "mss_bull" else 15))
 
     box = (range_ctx or {}).get("box") or {}
     play = (range_ctx or {}).get("recommended_play") or {}
@@ -114,56 +110,43 @@ def score_confluence(
         zone = box.get("zone")
         q = float(box.get("quality_score") or 0)
         if direction == "long" and zone == "discount":
-            score += 16 + min(10, q / 10)
-            factors.append("range_discount_long")
+            add("range_discount_long", 16 + min(10, q / 10))
         if direction == "short" and zone == "premium":
-            score += 16 + min(10, q / 10)
-            factors.append("range_premium_short")
+            add("range_premium_short", 16 + min(10, q / 10))
         if direction == "long" and play.get("play") in ("sweep_fade_long", "fade_long"):
-            score += 12
-            factors.append(play.get("play", "range_play"))
+            add(play.get("play", "range_play"), 12)
         if direction == "short" and play.get("play") in ("sweep_fade_short", "fade_short"):
-            score += 12
-            factors.append(play.get("play", "range_play"))
+            add(play.get("play", "range_play"), 12)
         if zone == "equilibrium" and structure == "ranging":
-            score -= 8
-            factors.append("range_mid_avoid")
+            add("range_mid_avoid", -8)
         align = (range_ctx or {}).get("range_aligned") or {}
         if direction == "long" and align.get("aligned_long"):
-            score += 10
-            factors.append("imbalance_stack_range_long")
+            add("imbalance_stack_range_long", 10)
         if direction == "short" and align.get("aligned_short"):
-            score += 10
-            factors.append("imbalance_stack_range_short")
+            add("imbalance_stack_range_short", 10)
         stacks = (range_ctx or {}).get("stacks") or []
         for st in stacks:
             if direction == "long" and st.get("direction") == "bullish":
-                score += 6
-                factors.append("bullish_imbalance_stack")
+                add("bullish_imbalance_stack", 6)
             if direction == "short" and st.get("direction") == "bearish":
-                score += 6
-                factors.append("bearish_imbalance_stack")
+                add("bearish_imbalance_stack", 6)
 
         # Range deviation factor
         deviation = (range_ctx or {}).get("deviation")
         if deviation:
             if direction == "long" and deviation.get("play") == "sweep_fade_long":
-                score += 18
-                factors.append("range_deviation_long")
+                add("range_deviation_long", 18)
             elif direction == "short" and deviation.get("play") == "sweep_fade_short":
-                score += 18
-                factors.append("range_deviation_short")
+                add("range_deviation_short", 18)
 
     # Swing leg Premium / Discount & OTE checks
     swing_leg = (range_ctx or {}).get("swing_leg")
     if swing_leg and swing_leg.get("active"):
         zone = swing_leg.get("zone")
         if direction == "long" and zone == "premium":
-            score -= 20.0
-            factors.append("chasing_in_premium")
+            add("chasing_in_premium", -(20.0))
         elif direction == "short" and zone == "discount":
-            score -= 20.0
-            factors.append("chasing_in_discount")
+            add("chasing_in_discount", -(20.0))
             
         fibs = swing_leg.get("fib_levels") or {}
         if fibs:
@@ -171,24 +154,20 @@ def score_confluence(
                 ote_low = float(fibs.get("ote_long_low", 0))
                 ote_high = float(fibs.get("ote_long_high", 0))
                 if ote_low <= close <= ote_high:
-                    score += 15.0
-                    factors.append("swing_ote_discount_long")
+                    add("swing_ote_discount_long", 15.0)
             else:
                 ote_low = float(fibs.get("ote_short_low", 0))
                 ote_high = float(fibs.get("ote_short_high", 0))
                 if ote_low <= close <= ote_high:
-                    score += 15.0
-                    factors.append("swing_ote_premium_short")
+                    add("swing_ote_premium_short", 15.0)
 
     # General BSL/SSL Sweep rewards
     sweeps = (range_ctx or {}).get("sweeps")
     if sweeps:
         if direction == "long" and sweeps.get("ssl_sweep"):
-            score += 18.0
-            factors.append("ssl_liquidity_sweep")
+            add("ssl_liquidity_sweep", 18.0)
         elif direction == "short" and sweeps.get("bsl_sweep"):
-            score += 18.0
-            factors.append("bsl_liquidity_sweep")
+            add("bsl_liquidity_sweep", 18.0)
 
     if block_ctx:
         obs = block_ctx.get("order_blocks") or {}
@@ -196,24 +175,20 @@ def score_confluence(
         if direction == "long":
             for ob in obs.get("bullish") or []:
                 if _near_level(close, float(ob["mid"]), 0.015):
-                    score += 15
-                    factors.append("near_bullish_ob")
+                    add("near_bullish_ob", 15)
                     break
             for bb in bbs.get("bullish") or []:
                 if _near_level(close, float(bb["mid"]), 0.015):
-                    score += 12
-                    factors.append("near_bullish_breaker")
+                    add("near_bullish_breaker", 12)
                     break
         else:
             for ob in obs.get("bearish") or []:
                 if _near_level(close, float(ob["mid"]), 0.015):
-                    score += 15
-                    factors.append("near_bearish_ob")
+                    add("near_bearish_ob", 15)
                     break
             for bb in bbs.get("bearish") or []:
                 if _near_level(close, float(bb["mid"]), 0.015):
-                    score += 12
-                    factors.append("near_bearish_breaker")
+                    add("near_bearish_breaker", 12)
                     break
 
     if indicator_signals is not None:

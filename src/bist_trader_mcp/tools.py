@@ -4194,10 +4194,17 @@ async def backtest_price_action_universe(
     max_hold: int = 20,
     min_rr: float = 1.5,
     cost_pct: float = 0.002,
+    save_weights: bool = False,
+    train_frac: float = 2 / 3,
 ) -> dict[str, Any]:
     """Run backtest_price_action over many symbols and pool the trades.
 
     Symbols are processed one by one (TradingView has a single chart).
+
+    ``save_weights=True`` learns factor weights + setup track records and saves
+    them for live analysis — but only marks them *active* if, fitted on the
+    first ``train_frac`` of every symbol's history, they did not make the
+    remaining out-of-sample part worse than the unweighted engine.
     """
     from .pa_backtest import (
         backtest_simple_pa,
@@ -4211,12 +4218,17 @@ async def backtest_price_action_universe(
     pooled: list[dict[str, Any]] = []
     failed = []
     sources: set[str] = set()
+    datasets: dict[str, tuple[list[float], ...]] = {}
+    splits: dict[str, int] = {}
     for sym in symbols:
         try:
             data = await _resolve_bars(
                 None, None, None, None, sym, timeframe, int(bars), data_source
             )
             warmup = min(120, max(60, len(data["closes"]) // 4))
+            n_bars = len(data["closes"])
+            splits[sym] = warmup + int((n_bars - warmup) * float(train_frac))
+            datasets[sym] = (_require_opens(data), data["highs"], data["lows"], data["closes"])
             bt = backtest_simple_pa(
                 _require_opens(data), data["highs"], data["lows"], data["closes"],
                 warmup=warmup, max_hold=int(max_hold), min_rr=float(min_rr),
@@ -4227,7 +4239,7 @@ async def backtest_price_action_universe(
             continue
         sources.add(str(data.get("data_source")))
         for tr in bt["trades"]:
-            pooled.append({**tr, "symbol": sym})
+            pooled.append({**tr, "symbol": sym, "oos": tr["signal_bar"] >= splits[sym]})
         s = bt["stats"]
         per_symbol.append(
             {
@@ -4242,8 +4254,20 @@ async def backtest_price_action_universe(
 
     stats = summarize_trades(pooled)
     attribution = pa_factor_attribution(pooled)
+    weights_report = None
+    if save_weights and pooled:
+        weights_report = _learn_and_save_weights(
+            pooled, datasets, splits,
+            meta={
+                "symbols": sorted(datasets), "timeframe": timeframe,
+                "trades": len(pooled), "max_hold": max_hold, "min_rr": min_rr,
+                "cost_pct": cost_pct,
+            },
+            max_hold=int(max_hold), min_rr=float(min_rr), cost_pct=float(cost_pct),
+        )
     return {
         "source": "bist-trader-mcp — pa_backtest (universe)",
+        "weights": weights_report,
         "timeframe": timeframe,
         "data_sources": sorted(sources),
         "symbols_tested": len(per_symbol),
@@ -4260,6 +4284,70 @@ async def backtest_price_action_universe(
             f"{stats['verdict_tr']} Tut: {', '.join(attribution['keep']) or '-'}. "
             f"At: {', '.join(attribution['drop']) or '-'}. "
             f"{attribution['confluence_score_check']['summary_tr']}"
+        ),
+    }
+
+
+def _learn_and_save_weights(
+    pooled: list[dict[str, Any]],
+    datasets: dict[str, tuple[list[float], ...]],
+    splits: dict[str, int],
+    *,
+    meta: dict[str, Any],
+    max_hold: int,
+    min_rr: float,
+    cost_pct: float,
+) -> dict[str, Any]:
+    """Fit on in-sample trades, validate out-of-sample, refit on all, save."""
+    from .pa_backtest import backtest_simple_pa, pa_factor_attribution, summarize_trades
+    from .pa_weights import build_weights, save_weights, weights_path
+
+    train = [t for t in pooled if not t["oos"]]
+    test_base = [t for t in pooled if t["oos"]]
+    # Stricter than the report (20 vs 10 trades per side) — weights change
+    # live verdicts, so a factor needs a real sample before it is silenced.
+    candidate = build_weights(pa_factor_attribution(train, min_samples=20), train)
+    test_weighted: list[dict[str, Any]] = []
+    for sym, (o, h, lo, c) in datasets.items():
+        if splits[sym] >= len(c) - 10:
+            continue
+        bt = backtest_simple_pa(
+            o, h, lo, c, warmup=splits[sym], max_hold=max_hold, min_rr=min_rr,
+            cost_pct=cost_pct, weights=candidate,
+        )
+        test_weighted.extend(bt["trades"])
+    base_s = summarize_trades(test_base, min_trades=10)
+    w_s = summarize_trades(test_weighted, min_trades=10)
+    base_e = base_s["expectancy_r"]
+    w_e = w_s["expectancy_r"]
+    if w_e is None:
+        active, why = False, "Örneklem dışında ağırlıklı sistem hiç işlem üretmedi."
+    elif base_e is None:
+        active, why = w_e > 0, "Ağırlıksız sistem örneklem dışında işlem üretmedi."
+    else:
+        active = w_e >= base_e
+        why = (
+            f"Örneklem dışı: ağırlıksız {base_e:+.2f}R/işlem ({base_s['trades']} işlem) → "
+            f"ağırlıklı {w_e:+.2f}R/işlem ({w_s['trades']} işlem)."
+        )
+    # refit on all data
+    final = build_weights(pa_factor_attribution(pooled, min_samples=20), pooled, meta=meta)
+    final["active"] = bool(active)
+    final["validation"] = {
+        "train_trades": len(train),
+        "oos_baseline": {k: base_s[k] for k in ("trades", "win_rate_pct", "expectancy_r")},
+        "oos_weighted": {k: w_s[k] for k in ("trades", "win_rate_pct", "expectancy_r")},
+        "summary_tr": why,
+    }
+    path = save_weights(final)
+    return {
+        "path": str(path or weights_path()),
+        "active": final["active"],
+        "factor_weights": final["factor_weights"],
+        "validation": final["validation"],
+        "summary_tr": why + (
+            " Ağırlıklar kaydedildi ve canlı analizde kullanılacak."
+            if active else " Ağırlıklar kaydedildi ama iyileştirme olmadığı için pasif."
         ),
     }
 

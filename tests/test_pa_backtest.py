@@ -179,3 +179,27 @@ def test_bar_cache_avoids_second_tradingview_pull(monkeypatch):
     assert len(calls) == 1
     assert len(a["closes"]) == 300 and len(b["closes"]) == 500
     assert a["closes"] == b["closes"][-300:]
+
+
+def test_universe_save_weights_validates_out_of_sample(monkeypatch, tmp_path):
+    import json
+
+    import bist_trader_mcp.tv_tools as tvt
+
+    monkeypatch.setenv("BIST_PA_WEIGHTS", str(tmp_path / "w.json"))
+    series = {"A": 3, "B": 5, "C": 7}
+
+    def fake(symbol, *a, **k):
+        o, h, l, c = _series(n=500, drift=0.002, vol=0.014, seed=series[symbol])
+        return {"success": True, "symbol_tv": symbol, "bars": {
+            "opens": o, "highs": h, "lows": l, "closes": c, "volumes": [1.0] * 500}}
+
+    monkeypatch.setattr(tvt, "tv_fetch_ohlcv", fake)
+    res = asyncio.run(tools.backtest_price_action_universe(list(series), save_weights=True))
+    w = res["weights"]
+    assert w is not None and "validation" in w
+    saved = json.loads((tmp_path / "w.json").read_text())
+    assert saved["active"] == w["active"]
+    assert saved["meta"]["symbols"] == ["A", "B", "C"]
+    v = saved["validation"]
+    assert v["train_trades"] + v["oos_baseline"]["trades"] == saved["meta"]["trades"]

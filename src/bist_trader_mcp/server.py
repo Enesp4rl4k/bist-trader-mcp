@@ -80,10 +80,10 @@ from .tools import (
     get_market_profile,
     get_market_summary,
     get_mkk_market_stats,
+    get_network_stats,
     get_news_headlines,
     get_repo_curve,
     get_simple_price_action,
-    get_network_stats,
     get_tcmb_policy_rates,
     get_trade_playbook_rules,
     get_turib_endeks_overview,
@@ -1826,8 +1826,10 @@ _register(
     description=(
         "MEASURE: backtest_price_action over a list of symbols (default ≈BIST30), "
         "one at a time on the TradingView chart, pooling all trades: pooled win "
-        "rate/expectancy, per-symbol table, and pooled factor keep/drop list. Use this "
-        "to decide which PA factors deserve weight — single-symbol samples are small."
+        "rate/expectancy, per-symbol table, and pooled factor keep/drop list. "
+        "save_weights=true learns factor weights + setup track records and saves them "
+        "for live analysis; they become active only if they did not worsen an "
+        "out-of-sample check (fit on first 2/3 of history, tested on the rest)."
     ),
     input_schema={
         "type": "object",
@@ -1836,10 +1838,12 @@ _register(
             "timeframe": _OHLC_PROPS["timeframe"],
             "data_source": _OHLC_PROPS["data_source"],
             **_BT_PROPS,
+            "save_weights": {"type": "boolean", "default": False},
         },
     },
     handler=lambda args: backtest_price_action_universe(
         symbols=args.get("symbols"),
+        save_weights=bool(args.get("save_weights", False)),
         timeframe=args.get("timeframe") or "1D",
         data_source=args.get("data_source", "auto"),
         bars=int(args.get("bars", 500)),

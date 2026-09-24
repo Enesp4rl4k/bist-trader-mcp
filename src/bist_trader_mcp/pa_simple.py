@@ -107,6 +107,22 @@ def simple_price_action(
     if plan and (plan["risk_reward"] or 0) < min_rr:
         plan = None
 
+    # Learned track record (pa_weights): veto setup types that lost money.
+    from .pa_weights import setup_track_record
+
+    veto = None
+    if plan:
+        key = "suggested_long_setup" if plan["direction"] == "long" else "suggested_short_setup"
+        rec = setup_track_record((pa.get(key) or {}).get("setup_type"))
+        if rec:
+            plan["track_record"] = rec
+            if float(rec["avg_r"]) <= -0.10:
+                veto = (
+                    f"Bu kurulum tipi geçmişte kaybettirdi ({rec['trades']} işlem, "
+                    f"ort. {rec['avg_r']:+.2f}R); pas geç."
+                )
+                plan = None
+
     if plan and plan["direction"] == "long":
         verdict = "AL"
         why = f"Trend {trend}, destek yakın; {plan['entry']} civarı alış, stop {plan['stop']}."
@@ -115,10 +131,18 @@ def simple_price_action(
         why = f"Trend {trend}, direnç yakın; {plan['entry']} civarı satış, stop {plan['stop']}."
     else:
         verdict = "BEKLE"
-        if structure in ("ranging", "transition"):
+        if veto:
+            why = veto
+        elif structure in ("ranging", "transition"):
             why = "Net yön yok; destek veya direnç kırılımını bekle."
         else:
             why = f"Trend {trend} ama giriş için risk/ödül uygun değil; geri çekilme bekle."
+    if plan and plan.get("track_record"):
+        rec = plan["track_record"]
+        why += (
+            f" Geçmiş: {rec['trades']} işlem, isabet %{rec['win_rate_pct']}, "
+            f"ort. {rec['avg_r']:+.2f}R."
+        )
 
     lines = [f"Trend: {trend} ({strength_tr})."]
     if support:
