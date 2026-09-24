@@ -4521,3 +4521,108 @@ async def get_portfolio_risk(data_source: str = "public") -> dict[str, Any]:
     bars = await _risk_bars(_open_symbols(), data_source)
     return {"source": "bist-trader-mcp — risk_engine.portfolio_risk",
             **portfolio_risk(bars_by_symbol=bars)}
+
+
+# --- Live dashboard (MCP Apps + local web) --------------------------------
+
+DASHBOARD_URI = "ui://bist-trader/dashboard.html"
+
+
+async def dashboard_snapshot(state: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Data for every enabled panel section (called by the dashboard on refresh)."""
+    from .dashboard_data import build_snapshot
+
+    return await build_snapshot(state)
+
+
+async def open_dashboard(
+    symbol: str | None = None,
+    timeframe: str | None = None,
+    watchlist: list[str] | None = None,
+    start_web: bool = True,
+) -> dict[str, Any]:
+    """Open the live panel; also starts the local browser version."""
+    from .dashboard_data import build_snapshot, snapshot_text
+
+    state: dict[str, Any] = {}
+    if symbol:
+        state["symbol"] = symbol
+    if timeframe:
+        state["timeframe"] = timeframe
+    if watchlist:
+        state["watchlist"] = watchlist
+    snap = await build_snapshot(state)
+    url = None
+    if start_web:
+        from . import dashboard_web
+
+        try:
+            url = dashboard_web.start(asyncio.get_running_loop(), dashboard_dispatch)
+        except OSError as e:
+            snap["web_error"] = str(e)
+    snap["local_url"] = url
+    snap["summary_tr"] = snapshot_text(snap) + (
+        f"\nTarayıcıda aç (Codex/terminal için): {url}" if url else ""
+    )
+    return snap
+
+
+async def dashboard_action(
+    action: str,
+    symbol: str,
+    timeframe: str = "1D",
+    plan: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Buttons of the dashboard: tv_open, tv_draw_plan, risk_check, journal_add."""
+    sym = symbol.strip().upper()
+    if action == "tv_open":
+        from .market_profiles import detect_asset_class, normalize_tv_symbol
+
+        sym_tv = normalize_tv_symbol(sym, detect_asset_class(sym))
+        a = await asyncio.to_thread(_tv_chart_set_symbol, sym_tv)
+        b = await asyncio.to_thread(_tv_chart_set_timeframe, timeframe)
+        ok = a.get("success", True) is not False and b.get("success", True) is not False
+        return {"ok": ok, "summary_tr": f"TradingView: {sym_tv} {timeframe} açıldı." if ok
+                else f"TradingView'a ulaşılamadı: {a.get('error') or b.get('error')}"}
+    if not plan or plan.get("entry") is None or plan.get("stop") is None:
+        return {"error": "no_plan", "detail": "Bu işlem için aktif plan gerekli."}
+    direction = plan.get("direction") or "long"
+    target = plan.get("target") or (plan.get("targets") or [None])[0]
+    if action == "risk_check":
+        return await check_trade_risk(sym, direction, plan["entry"], plan["stop"], target)
+    if action == "tv_draw_plan":
+        tv_plan = {"symbol": sym, "direction": direction, "entry": plan["entry"],
+                   "stop": plan["stop"], "targets": [{"price": target}] if target else []}
+        res = await asyncio.to_thread(apply_trade_to_chart, tv_plan, sym, timeframe)
+        ok = not res.get("error") and res.get("success", True) is not False
+        return {"ok": ok, "summary_tr": "Plan TradingView'a çizildi." if ok
+                else f"Çizilemedi: {res.get('detail') or res.get('error')}", "detail": res}
+    if action == "journal_add":
+        risk = await check_trade_risk(sym, direction, plan["entry"], plan["stop"], target)
+        if risk.get("error") or not risk.get("approved"):
+            return {**risk, "approved": False,
+                    "summary_tr": "Günlüğe eklenmedi. " + risk.get("summary_tr", "")}
+        from .trade_journal import log_trade_plan
+
+        logged = log_trade_plan(
+            {"symbol": sym, "direction": direction, "entry": plan["entry"],
+             "stop": plan["stop"], "targets": [target] if target else [],
+             "best_risk_reward": plan.get("risk_reward"), "sizing": risk["sizing"],
+             "source": "dashboard", "timeframe": timeframe},
+            notes="dashboard",
+        )
+        return {**risk, "trade_id": logged["trade_id"],
+                "summary_tr": f"Günlüğe eklendi ({logged['trade_id']}). " + risk["summary_tr"]}
+    return {"error": "unknown_action", "detail": action}
+
+
+async def dashboard_dispatch(name: str, args: dict[str, Any]) -> Any:
+    """Entry point for the local web server (same tools the MCP host calls)."""
+    if name == "dashboard_snapshot":
+        return await dashboard_snapshot(args.get("state"))
+    if name == "dashboard_action":
+        return await dashboard_action(
+            str(args.get("action") or ""), str(args.get("symbol") or ""),
+            str(args.get("timeframe") or "1D"), args.get("plan"),
+        )
+    raise ValueError(f"not a dashboard tool: {name}")

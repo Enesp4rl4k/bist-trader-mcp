@@ -92,6 +92,20 @@ get_kap_disclosures(company="THYAO")            # fundamental layer (after check
 | `design_scenario_trade_plan` | Plan + playbook (requires OHLCV) |
 | `get_market_profile` | HTF/LTF and thresholds |
 
+### Live dashboard (inside the AI app)
+
+`open_dashboard` opens an interactive panel **inside the chat** on MCP Apps hosts (Claude Desktop / claude.ai, Cursor, VS Code): macro · TL · commodity strip, watchlist with PA verdicts, TradingView chart with plan lines and the forecast band, KAP + news feed, risk and macro calendar. It refreshes itself (15/30/60 s), and its buttons (TV'de aç, Planı çiz, Risk kontrolü, Günlüğe ekle, Claude'a sor) run MCP tools. For hosts without inline UI (Codex, terminals) the same panel runs in a browser: the tool returns a `http://127.0.0.1:…/?t=…` link, or run `bist-trader-dashboard`. Design: [`docs/DASHBOARD_ARCHITECTURE.md`](docs/DASHBOARD_ARCHITECTURE.md).
+
+### Risk
+
+| Tool | Role |
+|------|-----|
+| `check_trade_risk` | Shares from equity × risk %, then portfolio checks: loss circuit breaker, max positions, total open risk (queued plans included), correlation cluster, liquidity, tavan/taban day, TCMB/CPI events |
+| `get_portfolio_risk` | Heat, pending plans, open P&L, realised P&L today/7d, breaker, correlated pairs, 1-day 95% VaR |
+| `get_risk_config` / `set_risk_config` | Equity, % risk per trade, caps and loss limits (`BIST_RISK_CONFIG`) |
+
+The daily pipeline and the dashboard's "Günlüğe ekle" run every plan through `check_trade_risk` first.
+
 ### Simple views (start here)
 
 | Tool | Role |
@@ -117,7 +131,7 @@ get_kap_disclosures(company="THYAO")            # fundamental layer (after check
 
 Live analysis (`get_simple_price_action`) uses the saved weights automatically: dropped factors no longer score, and a setup type with a proven negative record (≥ 20 trades) is downgraded to **BEKLE**. Backtests always measure the unweighted engine unless asked otherwise.
 
-**Paths / env:** `BIST_PA_WEIGHTS` (weights JSON), `BIST_TRADE_JOURNAL` (journal JSON), `BIST_FORECAST_DIR` (HTML output), `BIST_PANEL_DB` (price panel), `BIST_HTTP_PER_HOST` (parallel requests per host, default 4).
+**Paths / env:** `BIST_PA_WEIGHTS` (weights JSON), `BIST_TRADE_JOURNAL` (journal JSON), `BIST_FORECAST_DIR` (HTML output), `BIST_PANEL_DB` (price panel), `BIST_HTTP_PER_HOST` (parallel requests per host, default 4), `BIST_RISK_CONFIG` (risk settings), `BIST_DASHBOARD_PORT` (local panel, default 8765).
 
 The analysis tools take `symbol` + `timeframe` (TradingView labels: `60`, `240`, `1D`…) and pull bars **from the TradingView chart** (`data_source="auto"`); if TradingView Desktop is not reachable they fall back to Binance (crypto) or split-adjusted Yahoo daily bars (BIST). Raw `closes/highs/lows/opens` arrays also work. The forecast is model-free (block bootstrap of recent candle shapes, volatility-regime scaled) — a spread of plausible paths, not a signal.
 

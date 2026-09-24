@@ -13,11 +13,13 @@ import json
 from typing import Any
 
 from mcp.server import Server
+from mcp.server.lowlevel.helper_types import ReadResourceContents
 from mcp.server.stdio import stdio_server
-from mcp.types import TextContent
+from mcp.types import CallToolResult, TextContent
 
 from .http_utils import close_shared_client
 from .tools import (
+    DASHBOARD_URI,
     aggregate_portfolio_greeks,
     analyze_chart_scenarios,
     analyze_elliott_wave,
@@ -47,6 +49,8 @@ from .tools import (
     calculate_rolling_correlation,
     calculate_technicals,
     check_trade_risk,
+    dashboard_action,
+    dashboard_snapshot,
     design_from_price_action,
     design_ltf_trade_plan,
     design_mtf_trade_plan,
@@ -105,6 +109,7 @@ from .tools import (
     list_trade_journal,
     log_trade_plan,
     monitor_open_trades,
+    open_dashboard,
     optimize_portfolio_markowitz,
     pine_payload_from_trade_plan,
     portfolio_risk_check,
@@ -147,12 +152,21 @@ def _register(
     description: str,
     input_schema: dict[str, Any],
     handler: Any,
+    meta: dict[str, Any] | None = None,
+    structured: bool = False,
 ) -> None:
-    """Internal helper to register a tool for dispatch."""
+    """Internal helper to register a tool for dispatch.
+
+    ``meta`` becomes the tool's ``_meta`` (MCP Apps: ``{"ui": {...}}``);
+    ``structured=True`` returns the dict as ``structuredContent`` (what an MCP
+    App view reads) with its ``summary_tr`` as the text content.
+    """
     TOOL_REGISTRY[name] = {
         "description": description,
         "inputSchema": input_schema,
         "handler": handler,
+        "meta": meta,
+        "structured": structured,
     }
 
 
@@ -1883,6 +1897,74 @@ _register(
     handler=lambda args: get_portfolio_risk(),
 )
 
+_DASH_UI = {"resourceUri": DASHBOARD_URI}
+_DASH_META_MODEL = {"ui": {**_DASH_UI, "visibility": ["model", "app"]},
+                    "ui/resourceUri": DASHBOARD_URI}
+_DASH_META_APP = {"ui": {**_DASH_UI, "visibility": ["app"]}, "ui/resourceUri": DASHBOARD_URI}
+
+_register(
+    "open_dashboard",
+    description=(
+        "DASHBOARD: open the live, interactive BIST Trader panel inside the chat (MCP "
+        "Apps hosts: Claude, Cursor, VS Code…): macro/TL/commodity strip, watchlist with "
+        "PA verdicts, TradingView chart with plan + forecast band, KAP + news feed, risk "
+        "and macro calendar. The user picks symbol/timeframe/panels and presses buttons "
+        "(TV'de aç, Planı çiz, Risk kontrolü, Günlüğe ekle). Also returns a local browser "
+        "URL for hosts without inline UI (Codex, terminals)."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "symbol": {"type": "string", "description": "Initially selected symbol"},
+            "timeframe": {"type": "string", "enum": ["15", "60", "240", "1D", "1W"]},
+            "watchlist": {"type": "array", "items": {"type": "string"}},
+        },
+    },
+    handler=lambda args: open_dashboard(
+        symbol=args.get("symbol"), timeframe=args.get("timeframe"),
+        watchlist=args.get("watchlist"),
+    ),
+    meta=_DASH_META_MODEL,
+    structured=True,
+)
+
+_register(
+    "dashboard_snapshot",
+    description="Dashboard-internal: refresh data for the open panel (called by the UI).",
+    input_schema={
+        "type": "object",
+        "properties": {"state": {"type": "object"}},
+    },
+    handler=lambda args: dashboard_snapshot(args.get("state")),
+    meta=_DASH_META_APP,
+    structured=True,
+)
+
+_register(
+    "dashboard_action",
+    description=(
+        "Dashboard-internal: panel buttons — tv_open, tv_draw_plan, risk_check, "
+        "journal_add (called by the UI)."
+    ),
+    input_schema={
+        "type": "object",
+        "required": ["action", "symbol"],
+        "properties": {
+            "action": {"type": "string",
+                       "enum": ["tv_open", "tv_draw_plan", "risk_check", "journal_add"]},
+            "symbol": {"type": "string"},
+            "timeframe": {"type": "string"},
+            "plan": {"type": "object"},
+        },
+    },
+    handler=lambda args: dashboard_action(
+        action=args["action"], symbol=args["symbol"],
+        timeframe=args.get("timeframe") or "1D", plan=args.get("plan"),
+    ),
+    meta=_DASH_META_APP,
+    structured=True,
+)
+
 _register(
     "get_network_stats",
     description=(
@@ -3280,14 +3362,18 @@ async def _list_tools() -> list[Tool]:
             name=name,
             description=info["description"],
             inputSchema=info["inputSchema"],
+            _meta=info.get("meta"),
         )
         for name, info in TOOL_REGISTRY.items()
     ]
 
 
 @server.call_tool()
-async def _call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
+async def _call_tool(
+    name: str, arguments: dict[str, Any]
+) -> list[TextContent] | CallToolResult:
     arguments = arguments or {}
+    entry = None
     try:
         entry = TOOL_REGISTRY.get(name)
         if entry is None:
@@ -3303,7 +3389,25 @@ async def _call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     except Exception as e:  # surface unexpected errors as structured payload
         result = {"error": "tool_failed", "detail": f"{type(e).__name__}: {e}"}
 
+    if entry and entry.get("structured") and isinstance(result, dict):
+        return structured_result(result)
     return [TextContent(type="text", text=encode_result(result))]
+
+
+def structured_result(result: dict[str, Any]) -> CallToolResult:
+    """Text for the model + full payload as structuredContent for the view."""
+    compact = _compact_numbers(result)
+    if result.get("error"):
+        return CallToolResult(
+            content=[TextContent(type="text", text=encode_result(result))],
+            structuredContent=compact,
+            isError=True,
+        )
+    text = result.get("summary_tr") or "Panel verisi güncellendi."
+    return CallToolResult(
+        content=[TextContent(type="text", text=str(text))],
+        structuredContent=compact,
+    )
 
 
 def _compact_numbers(x: Any) -> Any:
@@ -3344,7 +3448,16 @@ from mcp.types import (  # noqa: E402
 )
 from pydantic import AnyUrl  # noqa: E402
 
+UI_MIME = "text/html;profile=mcp-app"
+UI_RESOURCE_META = {"ui": {"prefersBorder": False}}
+
 RESOURCES = [
+    {
+        "uri": DASHBOARD_URI,
+        "name": "BIST Trader live dashboard",
+        "description": "Interactive panel (MCP Apps view) used by open_dashboard.",
+        "mimeType": UI_MIME,
+    },
     {
         "uri": "bist-trader://catalog/evds-series",
         "name": "EVDS series catalog",
@@ -3383,14 +3496,22 @@ async def _list_resources() -> list[Resource]:
             name=r["name"],
             description=r["description"],
             mimeType=r["mimeType"],
+            _meta=UI_RESOURCE_META if r["mimeType"] == UI_MIME else None,
         )
         for r in RESOURCES
     ]
 
 
 @server.read_resource()
-async def _read_resource(uri: AnyUrl) -> str:
+async def _read_resource(uri: AnyUrl) -> str | list[ReadResourceContents]:
     uri_s = str(uri)
+    if uri_s == DASHBOARD_URI:
+        from .dashboard_web import dashboard_html
+
+        # No csp domains: the view never reaches the internet itself — all data
+        # comes through tools/call, so the host's strictest default applies.
+        return [ReadResourceContents(content=dashboard_html(), mime_type=UI_MIME,
+                                     meta=UI_RESOURCE_META)]
     if uri_s == "bist-trader://catalog/evds-series":
         return json.dumps(list_catalog(), ensure_ascii=False, indent=2)
     if uri_s == "bist-trader://catalog/pine-recipes":

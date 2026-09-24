@@ -1,0 +1,539 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BIST Trader Panel</title>
+<link rel="icon" href="data:,">
+<style>
+:root {
+  --bg:#0f131c; --panel:#171c28; --panel2:#1e2432; --line:#2a3142; --fg:#d7dae3;
+  --muted:#8b92a5; --up:#26a69a; --dn:#ef5350; --acc:#f5a623; --blue:#4c8dff;
+  --warn:#e0b341; --radius:8px;
+}
+:root[data-theme="light"] {
+  --bg:#f5f6f9; --panel:#ffffff; --panel2:#f0f2f6; --line:#dde1e8; --fg:#1b1f29;
+  --muted:#626a7b; --up:#0f8a7e; --dn:#d93c3a; --acc:#c77d00; --blue:#2f6fe0; --warn:#a67c00;
+}
+* { box-sizing:border-box; }
+html, body { margin:0; background:var(--bg); color:var(--fg);
+  font:13px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif; }
+button, input, select { font:inherit; color:inherit; }
+button { background:var(--panel2); border:1px solid var(--line); border-radius:6px;
+  padding:4px 10px; cursor:pointer; }
+button:hover { border-color:var(--muted); }
+button.on { background:var(--blue); border-color:var(--blue); color:#fff; }
+button:disabled { opacity:.5; cursor:default; }
+input, select { background:var(--panel2); border:1px solid var(--line); border-radius:6px;
+  padding:4px 8px; }
+.wrap { padding:10px; display:flex; flex-direction:column; gap:10px; }
+.bar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+.bar .grow { flex:1; }
+.muted { color:var(--muted); } .small { font-size:11px; }
+.up { color:var(--up); } .dn { color:var(--dn); } .acc { color:var(--acc); }
+.card { background:var(--panel); border:1px solid var(--line); border-radius:var(--radius);
+  padding:10px; min-width:0; }
+.card h3 { margin:0 0 8px; font-size:11px; letter-spacing:.06em; text-transform:uppercase;
+  color:var(--muted); display:flex; justify-content:space-between; align-items:center; }
+.ticker { display:flex; gap:6px; overflow-x:auto; padding-bottom:2px; scrollbar-width:thin; }
+.chip { flex:0 0 auto; background:var(--panel); border:1px solid var(--line); border-radius:6px;
+  padding:4px 8px; white-space:nowrap; }
+.chip b { margin-right:6px; }
+.grid { display:grid; grid-template-columns:230px minmax(0,1fr) 300px; gap:10px; }
+@media (max-width:1050px) { .grid { grid-template-columns:minmax(0,1fr); } }
+table { width:100%; border-collapse:collapse; }
+td { padding:5px 4px; border-top:1px solid var(--line); white-space:nowrap; }
+tr.sel td { background:var(--panel2); }
+tr.row { cursor:pointer; }
+.badge { display:inline-block; padding:1px 6px; border-radius:4px; font-size:11px; font-weight:700; }
+.b-AL { background:color-mix(in srgb, var(--up) 22%, transparent); color:var(--up); }
+.b-SAT { background:color-mix(in srgb, var(--dn) 22%, transparent); color:var(--dn); }
+.b-BEKLE { background:var(--panel2); color:var(--muted); }
+.x { color:var(--muted); cursor:pointer; padding:0 4px; }
+#chartBox { position:relative; height:360px; }
+canvas { width:100%; height:100%; display:block; }
+#tip { position:absolute; pointer-events:none; background:var(--panel2); border:1px solid var(--line);
+  border-radius:6px; padding:4px 8px; font-size:11px; display:none; white-space:nowrap; }
+.plan { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:6px; margin:8px 0; }
+.plan div { background:var(--panel2); border-radius:6px; padding:6px; }
+.plan span { display:block; font-size:11px; color:var(--muted); }
+.actions { display:flex; gap:6px; flex-wrap:wrap; }
+.news { max-height:520px; overflow-y:auto; }
+.item { padding:6px 0; border-top:1px solid var(--line); }
+.item a { color:var(--fg); text-decoration:none; cursor:pointer; }
+.item a:hover { text-decoration:underline; }
+.tag { font-size:10px; padding:0 5px; border-radius:3px; background:var(--panel2); color:var(--muted);
+  margin-right:4px; }
+.tag.kap { background:color-mix(in srgb, var(--dn) 25%, transparent); color:var(--dn); }
+.tag.hit { background:color-mix(in srgb, var(--acc) 25%, transparent); color:var(--acc); }
+.meter { height:6px; background:var(--panel2); border-radius:3px; overflow:hidden; margin:6px 0; }
+.meter > span { display:block; height:100%; background:var(--up); }
+.err { color:var(--dn); font-size:11px; }
+.lower { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:10px; }
+@media (max-width:1050px) { .lower { grid-template-columns:minmax(0,1fr); } }
+#toast { position:fixed; bottom:12px; left:50%; transform:translateX(-50%); background:var(--panel2);
+  border:1px solid var(--line); border-radius:6px; padding:6px 12px; display:none; z-index:5;
+  max-width:90%; }
+.result { margin-top:8px; font-size:12px; }
+.result .check { display:block; }
+.hidden { display:none !important; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="bar">
+    <b>BIST Trader</b>
+    <span class="muted small" id="mode"></span>
+    <span class="grow"></span>
+    <label class="small muted">Yenile
+      <select id="interval">
+        <option value="15">15 sn</option><option value="30" selected>30 sn</option>
+        <option value="60">60 sn</option><option value="0">Kapalı</option>
+      </select></label>
+    <button id="refresh" title="Şimdi yenile">↻</button>
+    <button id="panelsBtn" title="Bölümler">☰ Bölümler</button>
+    <button id="fullBtn" class="hidden" title="Tam ekran">⤢</button>
+  </div>
+  <div class="bar card hidden" id="panelsBox"></div>
+
+  <div class="ticker" id="ticker"></div>
+
+  <div class="grid">
+    <div class="card" id="wlCard">
+      <h3>İzleme listesi <span class="small" id="wlNote"></span></h3>
+      <table id="wl"></table>
+      <form id="addForm" class="bar" style="margin-top:8px">
+        <input id="addInput" placeholder="Sembol ekle (ASELS)" style="flex:1;min-width:0">
+        <button>+</button>
+      </form>
+    </div>
+
+    <div class="card" id="chartCard">
+      <h3><span id="chartTitle">Grafik</span>
+        <span class="bar" id="tfBar"></span></h3>
+      <div id="chartBox"><canvas id="chart"></canvas><div id="tip"></div></div>
+      <div class="small muted" id="chartNote"></div>
+      <div id="analysis"></div>
+      <div class="actions">
+        <button data-act="analyze">Analiz et</button>
+        <button data-act="tv_open">TV'de aç</button>
+        <button data-act="tv_draw_plan">Planı çiz</button>
+        <button data-act="risk_check">Risk kontrolü</button>
+        <button data-act="journal_add">Günlüğe ekle</button>
+        <button data-act="ask">Claude'a sor</button>
+      </div>
+      <div class="result" id="actResult"></div>
+    </div>
+
+    <div class="card" id="newsCard">
+      <h3>Haber akışı
+        <span class="bar">
+          <button data-nf="all" class="on">Tümü</button>
+          <button data-nf="wl">İzleme</button>
+          <button data-nf="tr">TR</button>
+        </span></h3>
+      <div class="news" id="news"></div>
+    </div>
+  </div>
+
+  <div class="lower">
+    <div class="card" id="riskCard"><h3>Risk</h3><div id="risk"></div></div>
+    <div class="card" id="calCard"><h3>Makro takvim (21 gün)</h3><div id="cal"></div></div>
+  </div>
+  <div class="small muted" id="status"></div>
+</div>
+<div id="toast"></div>
+
+<script>
+"use strict";
+// ---------------------------------------------------------------- transport
+// Inside an MCP Apps host we speak JSON-RPC over postMessage (SEP-1865);
+// opened from the local web server (?t=token) we POST to /api/call.
+const QS = new URLSearchParams(location.search);
+const TOKEN = QS.get("t");
+const IN_FRAME = window.parent !== window;
+const MCP = IN_FRAME && !TOKEN;
+let hostCtx = {};
+let rpcId = 1;
+const pending = new Map();
+const noteHandlers = {};
+
+function post(msg) { window.parent.postMessage(msg, "*"); }
+function request(method, params, timeoutMs = 60000) {
+  const id = rpcId++;
+  post({ jsonrpc: "2.0", id, method, params });
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { pending.delete(id); reject(new Error("zaman aşımı: " + method)); }, timeoutMs);
+    pending.set(id, { resolve, reject, timer });
+  });
+}
+function notify(method, params) { post({ jsonrpc: "2.0", method, params }); }
+window.addEventListener("message", (ev) => {
+  const m = ev.data;
+  if (!m || m.jsonrpc !== "2.0") return;
+  if (m.id !== undefined && pending.has(m.id) && (m.result !== undefined || m.error)) {
+    const p = pending.get(m.id); pending.delete(m.id); clearTimeout(p.timer);
+    m.error ? p.reject(new Error(m.error.message || "hata")) : p.resolve(m.result);
+    return;
+  }
+  if (m.method && m.id !== undefined) {           // host → view request
+    if (m.method === "ui/resource-teardown") stopTimer();
+    post({ jsonrpc: "2.0", id: m.id, result: {} });
+    return;
+  }
+  if (m.method && noteHandlers[m.method]) noteHandlers[m.method](m.params || {});
+});
+
+async function callTool(name, args) {
+  if (MCP) {
+    const res = await request("tools/call", { name, arguments: args || {} });
+    if (res && res.isError) throw new Error(textOf(res) || "araç hatası");
+    return res.structuredContent || parseText(res);
+  }
+  const r = await fetch("/api/call", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Dashboard-Token": TOKEN || "" },
+    body: JSON.stringify({ name, arguments: args || {} }),
+  });
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  const res = await r.json();
+  if (res.error) throw new Error(res.detail || res.error);
+  return res.structuredContent || parseText(res);
+}
+function textOf(res) { return ((res && res.content) || []).map(c => c.text || "").join("\n"); }
+function parseText(res) { try { return JSON.parse(textOf(res)); } catch { return {}; } }
+
+function openLink(url) {
+  if (!url) return;
+  if (MCP) request("ui/open-link", { url }).catch(() => toast("Link açılamadı"));
+  else window.open(url, "_blank", "noopener");
+}
+async function askModel(text) {
+  if (MCP) {
+    try { await request("ui/message", { role: "user", content: { type: "text", text } }); toast("Sohbete gönderildi"); }
+    catch (e) { toast("Gönderilemedi: " + e.message); }
+  } else {
+    try { await navigator.clipboard.writeText(text); toast("Soru panoya kopyalandı — AI sohbetine yapıştır"); }
+    catch { toast(text); }
+  }
+}
+let ctxTimer = null;
+function updateModelContext(text) {
+  if (!MCP) return;
+  clearTimeout(ctxTimer);
+  ctxTimer = setTimeout(() => request("ui/update-model-context",
+    { content: [{ type: "text", text }] }).catch(() => {}), 800);
+}
+
+// ---------------------------------------------------------------- state
+const PANELS = { ticker: "Piyasa şeridi", watchlist: "İzleme listesi", chart: "Grafik",
+  news: "Haberler", risk: "Risk", calendar: "Takvim" };
+const DEFAULT_STATE = { symbol: "THYAO", timeframe: "1D",
+  watchlist: ["THYAO","ASELS","GARAN","AKBNK","BIMAS","TUPRS","KCHOL","EREGL"],
+  panels: Object.fromEntries(Object.keys(PANELS).map(k => [k, true])), chart_source: "auto" };
+let state = load("bt_state", DEFAULT_STATE);
+let snap = null, newsFilter = "all", busy = false, timer = null;
+
+function load(k, d) { try { const v = JSON.parse(localStorage.getItem(k)); return v ? { ...d, ...v } : { ...d }; } catch { return { ...d }; } }
+function save() { try { localStorage.setItem("bt_state", JSON.stringify(state)); } catch {} }
+
+// ---------------------------------------------------------------- helpers
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+const fmt = (x, d = 2) => x == null || isNaN(x) ? "–" : Number(x).toLocaleString("tr-TR", { minimumFractionDigits: d, maximumFractionDigits: d });
+const pct = (x) => x == null ? "–" : `<span class="${x >= 0 ? "up" : "dn"}">${x >= 0 ? "+" : ""}${fmt(x)}%</span>`;
+function toast(t) { const el = $("toast"); el.textContent = t; el.style.display = "block"; clearTimeout(el._t); el._t = setTimeout(() => el.style.display = "none", 3500); }
+function ago(iso) {
+  const t = Date.parse(iso); if (isNaN(t)) return "";
+  const m = Math.round((Date.now() - t) / 60000);
+  return m < 1 ? "şimdi" : m < 60 ? m + " dk" : m < 1440 ? Math.round(m / 60) + " sa" : Math.round(m / 1440) + " g";
+}
+
+// ---------------------------------------------------------------- refresh
+async function refresh(force) {
+  if (busy && !force) return;
+  busy = true; $("refresh").disabled = true;
+  try {
+    const res = await callTool("dashboard_snapshot", { state });
+    if (res && res.sections) render(res);
+    else throw new Error((res && res.detail) || "boş yanıt");
+  } catch (e) { $("status").innerHTML = `<span class="err">Yenileme hatası: ${esc(e.message)}</span>`; }
+  finally { busy = false; $("refresh").disabled = false; }
+}
+function stopTimer() { clearInterval(timer); timer = null; }
+function startTimer() {
+  stopTimer();
+  const s = Number($("interval").value);
+  if (s > 0) timer = setInterval(() => { if (!document.hidden) refresh(); }, s * 1000);
+}
+document.addEventListener("visibilitychange", () => { if (!document.hidden && timer) refresh(); });
+
+// ---------------------------------------------------------------- render
+function render(s) {
+  snap = s;
+  const sec = s.sections || {};
+  for (const [k, id] of [["ticker","ticker"],["watchlist","wlCard"],["chart","chartCard"],["news","newsCard"],["risk","riskCard"],["calendar","calCard"]])
+    $(id).classList.toggle("hidden", !state.panels[k]);
+  if (sec.ticker) renderTicker(sec.ticker);
+  if (sec.watchlist) renderWatchlist(sec.watchlist);
+  if (sec.chart) renderChart(sec.chart);
+  if (sec.news) renderNews(sec.news);
+  if (sec.risk) renderRisk(sec.risk);
+  if (sec.calendar) renderCal(sec.calendar);
+  const errs = Object.entries(sec).filter(([, v]) => !v.ok).map(([k, v]) => `${PANELS[k] || k}: ${v.error}`);
+  const t = new Date(s.generated_at).toLocaleTimeString("tr-TR");
+  $("status").innerHTML = `Son güncelleme ${t} · ${esc(s.delayed_note || "")}` +
+    (errs.length ? `<br><span class="err">${errs.map(esc).join(" · ")}</span>` : "");
+  const a = sec.chart && sec.chart.ok ? sec.chart.data.analysis : null;
+  updateModelContext(`Kullanıcı BIST Trader panelinde ${state.symbol} ${state.timeframe} grafiğine bakıyor.` +
+    (a ? ` Sade PA: ${a.summary_tr}` : "") +
+    (sec.risk && sec.risk.ok ? ` Risk: ${sec.risk.data.summary_tr}` : ""));
+}
+function renderTicker(sec) {
+  $("ticker").innerHTML = !sec.ok ? `<span class="err">${esc(sec.error)}</span>` :
+    sec.data.map(r => `<span class="chip"><b>${esc(r.symbol)}</b>${fmt(r.last, r.last > 1000 ? 0 : 2)} ${pct(r.change_pct)}</span>`).join("");
+}
+function renderWatchlist(sec) {
+  if (!sec.ok) { $("wl").innerHTML = `<tr><td class="err">${esc(sec.error)}</td></tr>`; return; }
+  $("wl").innerHTML = sec.data.map(r => `
+    <tr class="row ${r.symbol === state.symbol ? "sel" : ""}" data-sym="${esc(r.symbol)}">
+      <td><b>${esc(r.symbol)}</b><br><span class="small muted">${esc(r.trend || "")}</span></td>
+      <td style="text-align:right">${fmt(r.last)}<br><span class="small">${pct(r.change_pct)}</span></td>
+      <td>${r.verdict ? `<span class="badge b-${esc(r.verdict)}">${esc(r.verdict)}</span>` : (r.error ? `<span class="err" title="${esc(r.error)}">!</span>` : "")}</td>
+      <td><span class="x" data-del="${esc(r.symbol)}" title="Çıkar">×</span></td>
+    </tr>`).join("");
+  $("wlNote").textContent = "günlük · gecikmeli";
+}
+function renderNews(sec) {
+  if (!sec.ok) { $("news").innerHTML = `<div class="err">${esc(sec.error)}</div>`; return; }
+  let items = sec.data;
+  if (newsFilter === "wl") items = items.filter(i => i.watchlist_hit && i.watchlist_hit.length);
+  if (newsFilter === "tr") items = items.filter(i => i.tr_relevant);
+  $("news").innerHTML = items.length ? items.map(i => `
+    <div class="item">
+      <span class="tag ${i.source === "KAP" ? "kap" : ""}">${esc(i.source)}</span>
+      ${(i.watchlist_hit || []).map(t => `<span class="tag hit">${esc(t)}</span>`).join("")}
+      <span class="small muted">${esc(ago(i.time))}</span><br>
+      <a data-link="${esc(i.link || "")}">${esc(i.title)}</a>
+    </div>`).join("") : `<div class="muted">Bu filtrede haber yok.</div>`;
+}
+function renderRisk(sec) {
+  if (!sec.ok) { $("risk").innerHTML = `<div class="err">${esc(sec.error)}</div>`; return; }
+  const r = sec.data, used = Math.min(100, 100 * r.heat_pct / (r.max_open_risk_pct || 1));
+  $("risk").innerHTML = `
+    <div class="bar"><b>Açık risk %${fmt(r.heat_pct)}</b><span class="muted">/ %${fmt(r.max_open_risk_pct, 1)}</span>
+      <span class="grow"></span>${r.circuit_breaker ? `<span class="badge b-SAT">DEVRE KESİCİ</span>` : ""}</div>
+    <div class="meter"><span style="width:${used}%;background:${used > 80 ? "var(--dn)" : used > 50 ? "var(--warn)" : "var(--up)"}"></span></div>
+    <div class="small muted">${esc(r.summary_tr)}</div>
+    <table>${(r.positions || []).map(p => `<tr><td><b>${esc(p.symbol)}</b> ${esc(p.direction)}</td>
+      <td>${fmt(p.entry)} → ${fmt(p.last)}</td><td>${p.open_pnl == null ? "" : `<span class="${p.open_pnl >= 0 ? "up" : "dn"}">${fmt(p.open_pnl, 0)}</span>`}</td>
+      <td class="muted">%${fmt(p.risk_pct)}</td></tr>`).join("")}</table>
+    ${(r.correlated_pairs || []).length ? `<div class="small acc">Birlikte hareket: ${r.correlated_pairs.map(p => `${esc(p.a)}–${esc(p.b)} (${p.corr})`).join(", ")}</div>` : ""}`;
+}
+function renderCal(sec) {
+  if (!sec.ok) { $("cal").innerHTML = `<div class="err">${esc(sec.error)}</div>`; return; }
+  $("cal").innerHTML = sec.data.length ? `<table>${sec.data.map(e => `<tr><td>${esc(e.date)}</td>
+    <td>${esc(e.event)}</td><td>${e.importance === "high" ? `<span class="badge b-SAT">yüksek</span>` : `<span class="muted small">${esc(e.importance)}</span>`}</td></tr>`).join("")}</table>`
+    : `<div class="muted">Yakın olay yok.</div>`;
+}
+
+// ---------------------------------------------------------------- chart
+let chartData = null, geom = null;
+function renderChart(sec) {
+  $("chartTitle").textContent = `${state.symbol} · ${state.timeframe}`;
+  if (!sec.ok) { chartData = null; drawChart(); $("analysis").innerHTML = `<div class="err">${esc(sec.error)}</div>`; return; }
+  chartData = sec.data;
+  const src = chartData.data_source === "tradingview" ? "TradingView" : chartData.data_source === "public" ? "Yahoo/Binance (yedek)" : chartData.data_source;
+  $("chartNote").innerHTML = `Kaynak: ${esc(src)}` + (chartData.tradingview_error ? ` · <span class="err">TV: ${esc(chartData.tradingview_error)}</span>` : "") +
+    ` · Tahmin: 30 koşunun %${chartData.forecast.up_pct}'i yukarı`;
+  const a = chartData.analysis, p = a.plan;
+  $("analysis").innerHTML = `
+    <div class="bar" style="margin-top:8px"><span class="badge b-${esc(a.verdict)}">${esc(a.verdict)}</span>
+      <span>${esc(a.reason)}</span></div>
+    ${p ? `<div class="plan"><div><span>Giriş</span>${fmt(p.entry)}</div><div><span>Stop</span><b class="dn">${fmt(p.stop)}</b></div>
+      <div><span>Hedef</span><b class="up">${fmt(p.target)}</b></div><div><span>R:R</span>${fmt(p.risk_reward)}</div></div>` : ""}
+    <div class="small muted">${esc(a.summary_tr)}</div>`;
+  drawChart();
+}
+function drawChart() {
+  const cv = $("chart"), box = $("chartBox"), dpr = window.devicePixelRatio || 1;
+  const W = box.clientWidth, H = box.clientHeight;
+  cv.width = W * dpr; cv.height = H * dpr;
+  const g = cv.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, W, H);
+  const css = getComputedStyle(document.documentElement), col = (v) => css.getPropertyValue(v).trim();
+  if (!chartData) { g.fillStyle = col("--muted"); g.fillText("Veri yok", 10, 20); geom = null; return; }
+  const c = chartData.candles, f = chartData.forecast, a = chartData.analysis, n = c.c.length, fh = f.mean.length;
+  const padR = 64, padB = 18, slots = n + fh + 1, step = (W - padR) / slots, bw = Math.max(1, step * 0.6);
+  let lo = Math.min(...c.l, ...f.p10), hi = Math.max(...c.h, ...f.p90);
+  const lv = [a.support && a.support.price, a.resistance && a.resistance.price, a.plan && a.plan.stop, a.plan && a.plan.target].filter(x => x);
+  lv.forEach(v => { if (v > lo * 0.85 && v < hi * 1.15) { lo = Math.min(lo, v); hi = Math.max(hi, v); } });
+  const pad = (hi - lo) * 0.06 || 1; lo -= pad; hi += pad;
+  const y = (p) => (hi - p) / (hi - lo) * (H - padB), x = (i) => (i + 0.5) * step;
+  geom = { x, y, step, n, lo, hi, H, padB, W, padR };
+  g.font = "11px system-ui"; g.strokeStyle = col("--line"); g.fillStyle = col("--muted"); g.lineWidth = 1;
+  for (let k = 0; k <= 5; k++) {
+    const p = lo + (hi - lo) * k / 5, yy = Math.round(y(p)) + .5;
+    g.beginPath(); g.moveTo(0, yy); g.lineTo(W - padR, yy); g.stroke(); g.fillText(fmt(p), W - padR + 4, Math.min(Math.max(yy + 4, 11), H - padB - 2));
+  }
+  // forecast band
+  const last = c.c[n - 1];
+  g.fillStyle = col("--acc") + "33"; g.beginPath(); g.moveTo(x(n - 1), y(last));
+  f.p90.forEach((v, i) => g.lineTo(x(n + i), y(v)));
+  for (let i = fh - 1; i >= 0; i--) g.lineTo(x(n + i), y(f.p10[i]));
+  g.closePath(); g.fill();
+  g.strokeStyle = col("--acc"); g.lineWidth = 1.5; g.beginPath(); g.moveTo(x(n - 1), y(last));
+  f.mean.forEach((v, i) => g.lineTo(x(n + i), y(v))); g.stroke();
+  // candles
+  for (let i = 0; i < n; i++) {
+    const up = c.c[i] >= c.o[i]; g.strokeStyle = g.fillStyle = up ? col("--up") : col("--dn"); g.lineWidth = 1;
+    const xx = Math.round(x(i)) + .5; g.beginPath(); g.moveTo(xx, y(c.h[i])); g.lineTo(xx, y(c.l[i])); g.stroke();
+    const t = y(Math.max(c.o[i], c.c[i])), b = y(Math.min(c.o[i], c.c[i]));
+    g.fillRect(xx - bw / 2, t, bw, Math.max(1, b - t));
+  }
+  // levels
+  const line = (p, color, label, dash) => {
+    if (!p || p < lo || p > hi) return;
+    const yy = Math.round(y(p)) + .5; g.setLineDash(dash || []); g.strokeStyle = color; g.lineWidth = 1;
+    g.beginPath(); g.moveTo(0, yy); g.lineTo(W - padR, yy); g.stroke(); g.setLineDash([]);
+    g.fillStyle = color; g.fillRect(W - padR, yy - 8, padR, 16); g.fillStyle = "#fff"; g.fillText(fmt(p), W - padR + 4, yy + 4);
+    g.fillStyle = color; g.fillText(label, 4, yy - 3);
+  };
+  line(a.support && a.support.price, col("--up") + "aa", "destek", [4, 4]);
+  line(a.resistance && a.resistance.price, col("--dn") + "aa", "direnç", [4, 4]);
+  if (a.plan) { line(a.plan.entry, col("--blue"), "giriş"); line(a.plan.stop, col("--dn"), "stop"); line(a.plan.target, col("--up"), "hedef"); }
+  line(last, col("--muted"), "", [2, 3]);
+  // forecast start
+  g.strokeStyle = col("--dn") + "88"; g.setLineDash([3, 3]); g.beginPath(); g.moveTo(x(n - 1) + step / 2, 0); g.lineTo(x(n - 1) + step / 2, H - padB); g.stroke(); g.setLineDash([]);
+  // time labels
+  g.fillStyle = col("--muted");
+  if (c.t && c.t.length === n) for (let i = 0; i < n; i += Math.ceil(n / 6)) {
+    const d = new Date(c.t[i] * 1000);
+    g.fillText(state.timeframe.match(/D|W/) ? d.toLocaleDateString("tr-TR", { day: "2-digit", month: "short" }) : d.toLocaleString("tr-TR", { day: "2-digit", hour: "2-digit", minute: "2-digit" }), x(i) - 16, H - 4);
+  }
+}
+$("chart").addEventListener("mousemove", (e) => {
+  if (!geom || !chartData) return;
+  const r = e.target.getBoundingClientRect(), i = Math.floor((e.clientX - r.left) / geom.step), c = chartData.candles, tip = $("tip");
+  if (i < 0 || i >= geom.n) { tip.style.display = "none"; return; }
+  const d = c.t && c.t[i] ? new Date(c.t[i] * 1000).toLocaleString("tr-TR") : "";
+  tip.innerHTML = `${esc(d)}<br>A ${fmt(c.o[i])} Y ${fmt(c.h[i])} D ${fmt(c.l[i])} K <b>${fmt(c.c[i])}</b>`;
+  tip.style.display = "block"; tip.style.left = Math.min(e.clientX - r.left + 12, r.width - 190) + "px"; tip.style.top = "8px";
+});
+$("chart").addEventListener("mouseleave", () => $("tip").style.display = "none");
+new ResizeObserver(() => drawChart()).observe($("chartBox"));
+
+// ---------------------------------------------------------------- actions
+async function act(action) {
+  if (action === "ask") {
+    const a = chartData && chartData.analysis;
+    return askModel(`BIST Trader panelinde ${state.symbol} (${state.timeframe}) inceliyorum.` +
+      (a ? ` Panelin sade PA özeti: ${a.summary_tr}` : "") +
+      ` Bu hisse için riskleri, son KAP/haber akışını ve planın mantıklı olup olmadığını değerlendirir misin?`);
+  }
+  const plan = chartData && chartData.analysis && chartData.analysis.plan;
+  if (["tv_draw_plan", "risk_check", "journal_add"].includes(action) && !plan) return toast("Aktif plan yok (karar BEKLE)");
+  const out = $("actResult"); out.innerHTML = `<span class="muted">Çalışıyor…</span>`;
+  try {
+    if (action === "analyze") { await refresh(true); out.innerHTML = ""; return; }
+    const res = await callTool("dashboard_action", { action, symbol: state.symbol, timeframe: state.timeframe, plan });
+    out.innerHTML = res.error ? `<span class="err">${esc(res.detail || res.error)}</span>` : resultHtml(res);
+    if (action === "journal_add" && res.approved) refresh(true);
+  } catch (e) { out.innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+}
+function resultHtml(r) {
+  let h = `<b>${esc(r.summary_tr || "Tamam")}</b>`;
+  if (r.checks) h += r.checks.map(c => `<span class="check ${c.ok ? "muted" : c.severity === "block" ? "dn" : "acc"}">${c.ok ? "✓" : c.severity === "block" ? "✗" : "!"} ${esc(c.detail)}</span>`).join("");
+  return h;
+}
+
+// ---------------------------------------------------------------- wiring
+function selectSymbol(sym) {
+  state.symbol = sym; save();
+  document.querySelectorAll("#wl tr.row").forEach(tr => tr.classList.toggle("sel", tr.dataset.sym === sym));
+  $("actResult").innerHTML = ""; refresh(true);
+}
+$("wl").addEventListener("click", (e) => {
+  const del = e.target.dataset.del;
+  if (del) { state.watchlist = state.watchlist.filter(s => s !== del); save(); refresh(true); e.stopPropagation(); return; }
+  const tr = e.target.closest("tr.row"); if (tr) selectSymbol(tr.dataset.sym);
+});
+$("addForm").addEventListener("submit", (e) => {
+  e.preventDefault(); const v = $("addInput").value.trim().toUpperCase(); if (!v) return;
+  if (!state.watchlist.includes(v)) state.watchlist.push(v);
+  $("addInput").value = ""; selectSymbol(v);
+});
+$("tfBar").innerHTML = ["15","60","240","1D","1W"].map(t => `<button data-tf="${t}" class="${t === state.timeframe ? "on" : ""}">${{ "15": "15d", "60": "1s", "240": "4s", "1D": "G", "1W": "H" }[t]}</button>`).join("");
+$("tfBar").addEventListener("click", (e) => {
+  const tf = e.target.dataset.tf; if (!tf) return;
+  state.timeframe = tf; save();
+  document.querySelectorAll("#tfBar button").forEach(b => b.classList.toggle("on", b.dataset.tf === tf));
+  refresh(true);
+});
+document.querySelectorAll("[data-act]").forEach(b => b.addEventListener("click", () => act(b.dataset.act)));
+document.querySelectorAll("[data-nf]").forEach(b => b.addEventListener("click", () => {
+  newsFilter = b.dataset.nf; document.querySelectorAll("[data-nf]").forEach(x => x.classList.toggle("on", x === b));
+  if (snap && snap.sections.news) renderNews(snap.sections.news);
+}));
+$("news").addEventListener("click", (e) => { const l = e.target.dataset.link; if (l) openLink(l); });
+$("refresh").addEventListener("click", () => refresh(true));
+$("interval").addEventListener("change", () => { try { localStorage.setItem("bt_interval", $("interval").value); } catch {} startTimer(); });
+try { const iv = localStorage.getItem("bt_interval"); if (iv) $("interval").value = iv; } catch {}
+$("panelsBtn").addEventListener("click", () => $("panelsBox").classList.toggle("hidden"));
+$("panelsBox").innerHTML = Object.entries(PANELS).map(([k, v]) => `<label><input type="checkbox" data-panel="${k}" ${state.panels[k] ? "checked" : ""}> ${v}</label>`).join(" ") +
+  ` <label class="small muted">Grafik kaynağı <select id="srcSel"><option value="auto">TradingView (yedekli)</option><option value="tradingview">Sadece TradingView</option><option value="public">Yahoo/Binance</option></select></label>`;
+$("srcSel").value = state.chart_source;
+$("srcSel").addEventListener("change", (e) => { state.chart_source = e.target.value; save(); refresh(true); });
+$("panelsBox").addEventListener("change", (e) => {
+  const k = e.target.dataset.panel; if (!k) return; state.panels[k] = e.target.checked; save(); refresh(true);
+});
+$("fullBtn").addEventListener("click", () => request("ui/request-display-mode", { mode: hostCtx.displayMode === "fullscreen" ? "inline" : "fullscreen" })
+  .then(r => { hostCtx.displayMode = r.mode; drawChart(); }).catch(() => {}));
+
+function applyTheme(ctx) {
+  const t = ctx && ctx.theme;
+  if (t) document.documentElement.dataset.theme = t;
+  else if (window.matchMedia && matchMedia("(prefers-color-scheme: light)").matches) document.documentElement.dataset.theme = "light";
+  drawChart();
+}
+
+// ---------------------------------------------------------------- boot
+async function boot() {
+  if (MCP) {
+    $("mode").textContent = "sohbet içi panel";
+    let initial = null;
+    noteHandlers["ui/notifications/tool-result"] = (p) => { if (p.structuredContent && p.structuredContent.sections) { initial = p.structuredContent; render(initial); } };
+    noteHandlers["ui/notifications/tool-input"] = (p) => {
+      const a = p.arguments || {};
+      if (a.symbol) state.symbol = String(a.symbol).toUpperCase();
+      if (a.timeframe) state.timeframe = String(a.timeframe).toUpperCase();
+      if (Array.isArray(a.watchlist) && a.watchlist.length) state.watchlist = a.watchlist.map(s => String(s).toUpperCase());
+      save();
+    };
+    noteHandlers["ui/notifications/host-context-changed"] = (p) => { hostCtx = { ...hostCtx, ...p }; applyTheme(hostCtx); };
+    try {
+      const res = await request("ui/initialize", {
+        appInfo: { name: "bist-trader-dashboard", version: "1.0.0" },
+        appCapabilities: { availableDisplayModes: ["inline", "fullscreen"] },
+        protocolVersion: "2026-01-26",
+      }, 10000);
+      hostCtx = (res && res.hostContext) || {};
+      notify("ui/notifications/initialized", {});
+      applyTheme(hostCtx);
+      if ((hostCtx.availableDisplayModes || []).includes("fullscreen")) $("fullBtn").classList.remove("hidden");
+      let raf = 0;
+      new ResizeObserver(() => { cancelAnimationFrame(raf); raf = requestAnimationFrame(() =>
+        notify("ui/notifications/size-changed", { width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight })); })
+        .observe(document.body);
+    } catch (e) { $("status").innerHTML = `<span class="err">Host bağlantısı kurulamadı: ${esc(e.message)}</span>`; }
+    setTimeout(() => { if (!initial) refresh(true); }, 2500);
+  } else {
+    $("mode").textContent = "tarayıcı modu";
+    applyTheme({});
+    refresh(true);
+  }
+  startTimer();
+}
+boot();
+</script>
+</body>
+</html>
