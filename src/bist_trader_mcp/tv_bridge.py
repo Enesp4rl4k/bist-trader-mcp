@@ -505,23 +505,22 @@ def apply_pa_overlay_to_chart(
 ) -> dict[str, Any]:
     """Draw PA on chart: S/R horizontals + HTF/LTF structure label (LTF timeframe)."""
     from .chart_drawing_styles import (
-        PA_BANNER_TEXT,
-        PA_FVG_LINE,
+        PA_BOS_LINE,
+        PA_BREAKER_BEAR_BOX,
+        PA_BREAKER_BULL_BOX,
+        PA_CHOCH_LINE,
         PA_FVG_BOX,
+        PA_FVG_LINE,
+        PA_MSS_LINE,
+        PA_OB_BEAR_BOX,
+        PA_OB_BULL_BOX,
         PA_RANGE_HIGH,
         PA_RANGE_LOW,
         PA_RANGE_MID,
         PA_RESIST_LINE,
         PA_SUPPORT_LINE,
-        PA_OB_BULL_BOX,
-        PA_OB_BEAR_BOX,
-        PA_BREAKER_BULL_BOX,
-        PA_BREAKER_BEAR_BOX,
-        PA_BOS_LINE,
-        PA_CHOCH_LINE,
-        PA_MSS_LINE,
-        PA_SWING_OTE_BOX,
         PA_SWEEP_LINE,
+        PA_SWING_OTE_BOX,
         overrides_json,
     )
     from .tv_tools import tv_draw_horizontal_line, tv_draw_rectangle, tv_draw_text
@@ -532,8 +531,6 @@ def apply_pa_overlay_to_chart(
 
     t_anchor = int(ltf_times[-1]) if ltf_times else int(time.time())
     close = float(ltf_closes[-1]) if ltf_closes else 0.0
-    banner_y = _banner_anchor_price(ltf_highs, ltf_closes)
-
     out: dict[str, Any] = {"success": True, "levels": [], "labels": []}
 
     resistances = ltf_pa.get("resistance_levels") or []
@@ -615,7 +612,7 @@ def apply_pa_overlay_to_chart(
         )
         # Fallback to horizontal lines if rectangle drawing is not supported or failed
         if not res.get("success"):
-            for px, lbl in ((top, f"{label} top"), (bot, f"{label} bot")):
+            for px, _lbl in ((top, f"{label} top"), (bot, f"{label} bot")):
                 out["levels"].append(
                     tv_draw_horizontal_line(
                         t_anchor, px, overrides=overrides_json(PA_FVG_LINE)
@@ -655,7 +652,7 @@ def apply_pa_overlay_to_chart(
             overrides=overrides_json(style_dict),
         )
         if not res.get("success"):
-            for px, lbl in ((top, f"{label} top"), (bot, f"{label} bot")):
+            for px, _lbl in ((top, f"{label} top"), (bot, f"{label} bot")):
                 out["levels"].append(
                     tv_draw_horizontal_line(
                         t_anchor, px, overrides=overrides_json(style_dict)
@@ -819,7 +816,7 @@ def apply_scenario_to_chart(
     chart_style: str = "full",
 ) -> dict[str, Any]:
     """Draw on LTF chart: EW (mapped from HTF indices) + PA + Long/Short position tool."""
-    from .chart_draw_coords import map_points_to_chart_times, points_drawable_on_chart
+    from .chart_draw_coords import points_drawable_on_chart
     from .chart_drawing_styles import EW_POINT_LABEL, EW_TREND_LINE, overrides_json
     from .tv_tools import (
         tv_chart_set_candles,
@@ -846,8 +843,6 @@ def apply_scenario_to_chart(
         time.sleep(2.0)
         results["steps"].append(tv_chart_set_candles())
         time.sleep(0.5)
-
-    chart_times = ltf_times if (draw_on_ltf and ltf_times) else bar_times
 
     # --- Elliott Wave: always use HTF coordinates (no LTF mapping) ---
     # EW is computed on HTF data, so HTF timestamps are the correct

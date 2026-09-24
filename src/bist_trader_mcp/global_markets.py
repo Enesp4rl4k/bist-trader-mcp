@@ -114,7 +114,7 @@ async def fetch_global_pulse(
         return out
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
-    for (category, aliases_list, symbols), result in zip(cat_for, results,
+    for (category, aliases_list, _symbols), result in zip(cat_for, results,
                                                           strict=False):
         if isinstance(result, BaseException):
             out[category] = {}

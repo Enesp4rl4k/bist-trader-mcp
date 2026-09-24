@@ -39,9 +39,10 @@ classifiers = [
     "Topic :: Office/Business :: Financial :: Investment",
 ]
 dependencies = [
-    "mcp>=1.2.0",
-    "httpx>=0.27.0",
-    "pydantic>=2.6.0",
+    # mcp 2.x removed the low-level Server decorators this server is built on.
+    "mcp>=1.2.0,<2",
+    "httpx>=0.27.0,<1",
+    "pydantic>=2.6.0,<3",
     "python-dateutil>=2.9.0",
     # PDF parser — used by hazine.py to read the quarterly DİBS borrowing
     # strategy bulletin. Light dep (~5 MB) so we ship it in the base set.
@@ -98,6 +99,22 @@ select = ["E", "F", "I", "B", "UP", "N"]
 "src/bist_trader_mcp/portfolio_opt.py" = ["N803", "N806"]
 "src/bist_trader_mcp/realized_vol.py" = ["E702"]
 "src/bist_trader_mcp/server.py" = ["E501"]
+# Legacy analysis modules with long f-strings; wrap them when the file is next touched.
+"src/bist_trader_mcp/pa_setups.py" = ["E501"]
+"src/bist_trader_mcp/pa_blocks.py" = ["E501"]
+"src/bist_trader_mcp/pa_structure.py" = ["E501"]
+"src/bist_trader_mcp/pa_range.py" = ["E501"]
+"src/bist_trader_mcp/pa_imbalances.py" = ["E501"]
+"src/bist_trader_mcp/pa_scanner.py" = ["E501"]
+"src/bist_trader_mcp/fundamental_ratios.py" = ["E501"]
+"src/bist_trader_mcp/fundamental_context.py" = ["E501"]
+"src/bist_trader_mcp/elliott_detail.py" = ["E501"]
+"src/bist_trader_mcp/elliott_wave.py" = ["E501"]
+"src/bist_trader_mcp/elliott_projections.py" = ["E501"]
+"src/bist_trader_mcp/chart_scenarios.py" = ["E501"]
+"src/bist_trader_mcp/market_assistant.py" = ["E501"]
+"src/bist_trader_mcp/data_quality.py" = ["E501"]
+"src/bist_trader_mcp/bist_calendar.py" = ["E501"]
 "src/bist_trader_mcp/forecast_chart.py" = ["E501"]
 "src/bist_trader_mcp/daily_pipeline.py" = ["E501"]
 "scripts/e2e_dashboard.py" = ["E501"]

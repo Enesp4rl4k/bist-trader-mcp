@@ -87,7 +87,7 @@ def test_analyze_price_action_has_range_and_imbalances():
 
 
 def test_detect_range_deviation_low():
-    from bist_trader_mcp.pa_range import detect_trading_range, detect_range_deviation
+    from bist_trader_mcp.pa_range import detect_range_deviation, detect_trading_range
 
     c, h, l = _oscillating_range(48)
     box = detect_trading_range(h, l, c, atr_val=2.0, window=40)
