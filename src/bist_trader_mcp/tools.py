@@ -4444,3 +4444,80 @@ async def run_daily_pipeline(
     except (TypeError, ValueError, OSError) as e:
         return {"error": "pipeline_failed", "detail": str(e)}
     return {"source": "bist-trader-mcp — daily_pipeline", **res}
+
+
+# --- Risk engine ------------------------------------------------------------
+
+
+async def _risk_bars(symbols: list[str], data_source: str = "public") -> dict[str, Any]:
+    """Daily bars for risk maths. Defaults to public data so checking risk never
+    flips the user's TradingView chart through every open position."""
+    out: dict[str, Any] = {}
+    for sym in dict.fromkeys(s.strip().upper() for s in symbols if s):
+        try:
+            out[sym] = await _resolve_bars(None, None, None, None, sym, "1D", 120, data_source)
+        except (SourceError, TypeError, ValueError):
+            continue
+    return out
+
+
+def _open_symbols() -> list[str]:
+    from .risk_engine import _journal_rows
+
+    return [str(r.get("symbol")) for r in _journal_rows(None)
+            if r.get("status") in ("open", "planned") and r.get("symbol")]
+
+
+def get_risk_config() -> dict[str, Any]:
+    from dataclasses import asdict
+
+    from .risk_engine import config_path, load_config
+
+    return {"source": "bist-trader-mcp — risk_engine", "path": str(config_path()),
+            **asdict(load_config())}
+
+
+def set_risk_config(**updates: Any) -> dict[str, Any]:
+    from dataclasses import asdict
+
+    from .risk_engine import config_path, save_config
+
+    try:
+        cfg = save_config({k: v for k, v in updates.items() if v is not None})
+    except (TypeError, ValueError) as e:
+        return {"error": "bad_input", "detail": str(e)}
+    return {"source": "bist-trader-mcp — risk_engine", "path": str(config_path()),
+            "saved": True, **asdict(cfg)}
+
+
+async def check_trade_risk(
+    symbol: str,
+    direction: str,
+    entry: float,
+    stop: float,
+    target: float | None = None,
+    *,
+    data_source: str = "public",
+) -> dict[str, Any]:
+    """Size a trade and run all portfolio checks (see risk_engine.check_trade)."""
+    from .risk_engine import check_trade
+
+    try:
+        bars = await _risk_bars([symbol, *_open_symbols()], data_source)
+        res = check_trade(
+            {"direction": direction, "entry": float(entry), "stop": float(stop),
+             "target": None if target is None else float(target)},
+            symbol=symbol, bars_by_symbol=bars,
+        )
+    except (KeyError, TypeError, ValueError) as e:
+        return {"error": "bad_input", "detail": str(e)}
+    return {"source": "bist-trader-mcp — risk_engine.check_trade", **res}
+
+
+async def get_portfolio_risk(data_source: str = "public") -> dict[str, Any]:
+    """Heat, open positions, realised P&L, circuit breaker, clusters, VaR."""
+    from .risk_engine import portfolio_risk
+
+    bars = await _risk_bars(_open_symbols(), data_source)
+    return {"source": "bist-trader-mcp — risk_engine.portfolio_risk",
+            **portfolio_risk(bars_by_symbol=bars)}

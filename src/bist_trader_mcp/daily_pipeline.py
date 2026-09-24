@@ -232,15 +232,26 @@ async def run_pipeline(
             failed.append({"symbol": sym, "detail": f"scan: {e}"})
     ranked = rank_candidates(scans)
 
-    busy = {
-        str(r.get("symbol")) for r in _load(Path(journal_path) if journal_path
-                                            else _default_journal_path())
-        if r.get("status") in ("planned", "open")
-    }
-    picks = [s for s in ranked if s["symbol"] not in busy][: max(0, int(top_n))]
+    from .risk_engine import check_trade, load_config
+
+    cfg = load_config()
+    picks: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
     logged = []
-    if log_to_journal:
-        for s in picks:
+    for s in ranked:
+        if len(picks) >= max(0, int(top_n)):
+            break
+        # Each check sees the plans logged earlier in this run (they are
+        # "planned" rows in the journal), so heat and clusters add up correctly.
+        risk = check_trade(s["plan"], symbol=s["symbol"], cfg=cfg,
+                           bars_by_symbol=bars_by_symbol, journal_path=journal_path)
+        s["risk"] = {k: risk[k] for k in ("approved", "sizing", "blocking", "warnings",
+                                          "summary_tr")}
+        if not risk["approved"]:
+            rejected.append({"symbol": s["symbol"], "blocking": risk["blocking"]})
+            continue
+        picks.append(s)
+        if log_to_journal:
             p = s["plan"]
             if s["signal_time"] is None:
                 continue
@@ -253,6 +264,7 @@ async def run_pipeline(
                     "market": abs(p["entry"] - s["price"]) <= 1e-9 * max(1.0, s["price"]),
                     "max_hold": max_hold, "setup_type": s["setup_type"],
                     "forecast_up_pct": s["forecast_up_pct"],
+                    "sizing": risk["sizing"],
                 },
                 notes=f"{PIPELINE_TAG} {day}",
                 journal_path=journal_path,
@@ -279,9 +291,10 @@ async def run_pipeline(
         "breadth": {"trend_counts": trend_counts, "forecast_up_share_pct": up_share},
         "picks": [
             {k: s[k] for k in ("symbol", "verdict", "price", "plan", "setup_type",
-                               "forecast_up_pct", "forecast_agrees", "reason")}
+                               "forecast_up_pct", "forecast_agrees", "reason", "risk")}
             for s in picks
         ],
+        "risk_rejected": rejected,
         "logged_trade_ids": logged,
         "tracked_changes": tracked,
         "performance": perf,

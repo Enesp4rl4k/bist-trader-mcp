@@ -46,6 +46,7 @@ from .tools import (
     calculate_realized_vol,
     calculate_rolling_correlation,
     calculate_technicals,
+    check_trade_risk,
     design_from_price_action,
     design_ltf_trade_plan,
     design_mtf_trade_plan,
@@ -82,7 +83,9 @@ from .tools import (
     get_mkk_market_stats,
     get_network_stats,
     get_news_headlines,
+    get_portfolio_risk,
     get_repo_curve,
+    get_risk_config,
     get_simple_price_action,
     get_tcmb_policy_rates,
     get_trade_playbook_rules,
@@ -114,6 +117,7 @@ from .tools import (
     scan_mtf_watchlist,
     scan_price_action_watchlist,
     screen_equity_universe,
+    set_risk_config,
     simulate_option_strategy,
     stress_test_portfolio,
     tv_chart_set_symbol,
@@ -1807,6 +1811,76 @@ _register(
         log_to_journal=bool(args.get("log_to_journal", True)),
         save_html=bool(args.get("save_html", True)),
     ),
+)
+
+_RISK_FIELDS = {
+    "equity": {"type": "number", "description": "Account size (TL)"},
+    "risk_per_trade_pct": {"type": "number", "description": "Stop risk per trade, % equity"},
+    "max_open_risk_pct": {"type": "number", "description": "Cap on total open stop risk"},
+    "max_positions": {"type": "integer"},
+    "max_cluster_positions": {"type": "integer",
+                              "description": "Max open trades that move together"},
+    "cluster_corr": {"type": "number", "description": "Correlation that defines a cluster"},
+    "daily_loss_limit_pct": {"type": "number"},
+    "weekly_loss_limit_pct": {"type": "number"},
+    "max_adv_pct": {"type": "number",
+                    "description": "Max position value as % of 20-day avg traded value"},
+    "event_blackout_days": {"type": "integer"},
+    "lot_size": {"type": "integer"},
+}
+
+_register(
+    "get_risk_config",
+    description="RISK: current risk settings (equity, % risk per trade, caps, loss limits).",
+    input_schema={"type": "object", "properties": {}},
+    handler=lambda args: get_risk_config(),
+)
+
+_register(
+    "set_risk_config",
+    description=(
+        "RISK: update risk settings (only the fields you pass change). Used by position "
+        "sizing, check_trade_risk, the daily pipeline and the dashboard."
+    ),
+    input_schema={"type": "object", "properties": _RISK_FIELDS},
+    handler=lambda args: set_risk_config(**{k: args.get(k) for k in _RISK_FIELDS}),
+)
+
+_register(
+    "check_trade_risk",
+    description=(
+        "RISK: size a trade (shares from equity × risk %) and run portfolio checks: "
+        "geometry, daily/weekly loss circuit breaker, duplicate, max positions, total "
+        "open risk, correlation cluster, liquidity vs 20-day traded value, tavan/taban "
+        "day, upcoming TCMB/CPI events. Returns approved + quantity + reasons."
+    ),
+    input_schema={
+        "type": "object",
+        "required": ["symbol", "direction", "entry", "stop"],
+        "properties": {
+            "symbol": {"type": "string"},
+            "direction": {"type": "string", "enum": ["long", "short"]},
+            "entry": {"type": "number"},
+            "stop": {"type": "number"},
+            "target": {"type": "number"},
+        },
+    },
+    handler=lambda args: check_trade_risk(
+        symbol=args["symbol"], direction=args["direction"],
+        entry=float(args["entry"]), stop=float(args["stop"]),
+        target=args.get("target"),
+    ),
+)
+
+_register(
+    "get_portfolio_risk",
+    description=(
+        "RISK: portfolio heat (open stop risk %), pending plans, positions with open P&L, "
+        "realised P&L today / 7 days, circuit breaker state, correlated pairs, 1-day 95% "
+        "historical VaR. Positions come from the trade journal."
+    ),
+    input_schema={"type": "object", "properties": {}},
+    handler=lambda args: get_portfolio_risk(),
 )
 
 _register(

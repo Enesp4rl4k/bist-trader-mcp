@@ -10,6 +10,11 @@ from bist_trader_mcp.pa_weights import use_weights
 
 from .test_candle_forecast import _series
 
+
+@pytest.fixture(autouse=True)
+def _isolated_risk_config(tmp_path, monkeypatch):
+    monkeypatch.setenv("BIST_RISK_CONFIG", str(tmp_path / "risk.json"))
+
 DAY = 86_400
 
 
@@ -17,7 +22,7 @@ def _bars(seed, n, drift=0.003):
     o, h, l, c = _series(n=700, drift=drift, vol=0.012, seed=seed)
     times = [1_600_000_000 + i * DAY for i in range(700)]
     full = {"opens": o, "highs": h, "lows": l, "closes": c,
-            "volumes": [1.0] * 700, "times": times}
+            "volumes": [5e6] * 700, "times": times}
     return {k: v[:n] for k, v in full.items()}
 
 
@@ -63,7 +68,9 @@ def test_pipeline_logs_then_tracks_outcomes(tmp_path, monkeypatch):
     assert len(day1["logged_trade_ids"]) == len(day1["picks"])
     assert (tmp_path / f"daily_{day1['date']}.html").exists()
     assert day1["prices_stored"] > 0
-    assert day1["logged_trade_ids"], "synthetic day 1 should produce plans"
+    assert day1["logged_trade_ids"], f"no plans on day 1: {day1['risk_rejected']}"
+    for p in day1["picks"]:
+        assert p["risk"]["approved"] and p["risk"]["sizing"]["quantity"] > 0
     rows = json.loads(journal.read_text())
     assert all(r["plan_snapshot"]["source"] == dp.PIPELINE_TAG for r in rows)
 
@@ -110,3 +117,24 @@ def test_run_daily_pipeline_tool(monkeypatch, tmp_path):
     assert res["symbols_scanned"] == 2
     assert res["html_path"].startswith(str(tmp_path))
     assert "summary_tr" in res
+
+
+def test_pipeline_stops_logging_when_risk_budget_is_full(tmp_path, monkeypatch):
+    from bist_trader_mcp import risk_engine
+
+    monkeypatch.setenv("BIST_PANEL_DB", str(tmp_path / "panel.db"))
+    risk_engine.save_config({"max_open_risk_pct": 1.0, "risk_per_trade_pct": 1.0})
+    journal = tmp_path / "journal.json"
+    seeds = {"AAA": 3, "BBB": 5, "CCC": 7}
+
+    async def load(sym):
+        return _bars(seeds[sym], 450)
+
+    async def run():
+        with use_weights(None):
+            return await dp.run_pipeline(list(seeds), load, top_n=5, journal_path=journal,
+                                         store_prices=False)
+
+    res = asyncio.run(run())
+    assert len(res["logged_trade_ids"]) == 1  # budget for exactly one 1% trade
+    assert any("open_risk" in r["blocking"] for r in res["risk_rejected"])
