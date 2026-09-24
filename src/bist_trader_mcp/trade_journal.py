@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,6 +13,11 @@ Status = Literal["planned", "open", "closed", "cancelled"]
 
 
 def _default_journal_path() -> Path:
+    override = os.environ.get("BIST_TRADE_JOURNAL")
+    if override:
+        path = Path(override)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
     base = Path.home() / ".bist-trader"
     base.mkdir(parents=True, exist_ok=True)
     return base / "trade_journal.json"

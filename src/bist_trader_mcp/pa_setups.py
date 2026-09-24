@@ -718,12 +718,34 @@ def pick_best_setup(
     *,
     min_confluence: float = 50.0,
 ) -> dict[str, Any] | None:
+    candidates = [c for c in candidates if _valid_geometry(c)]
     if not candidates:
         return None
     if float(confluence.get("score") or 0) < min_confluence:
         return None
     best = candidates[0]
     return {**best, "confluence": confluence}
+
+
+def _valid_geometry(setup: dict[str, Any]) -> bool:
+    """Long: stop < entry < first target. Short: first target < entry < stop.
+
+    Some builders derive targets from swing/fib levels that can sit on the wrong
+    side of the entry (e.g. an inverted swing leg in a strong trend); such a
+    plan would be a guaranteed loser, so it is never offered.
+    """
+    try:
+        entry = float(setup["entry"])
+        stop = float(setup["stop"])
+        targets = setup.get("targets") or []
+        target = float(targets[0]) if targets else None
+    except (KeyError, TypeError, ValueError):
+        return False
+    if setup.get("direction") == "long":
+        return stop < entry and (target is None or entry < target)
+    if setup.get("direction") == "short":
+        return entry < stop and (target is None or target < entry)
+    return False
 
 
 __all__ = [

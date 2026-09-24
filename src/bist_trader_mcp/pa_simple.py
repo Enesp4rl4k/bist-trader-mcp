@@ -44,6 +44,10 @@ def _plan(setup: dict[str, Any] | None) -> dict[str, Any] | None:
     if not targets:
         return None
     target = float(targets[0])
+    long = setup.get("direction") == "long"
+    # Wrong-side levels are rejected, never shown with an abs() R:R.
+    if (long and not stop < entry < target) or (not long and not target < entry < stop):
+        return None
     risk = abs(entry - stop)
     rr = round(abs(target - entry) / risk, 2) if risk > 0 else None
     return {

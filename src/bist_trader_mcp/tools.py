@@ -4411,3 +4411,36 @@ def get_network_stats(prune_cache: bool = False) -> dict[str, Any]:
         out["pruned"] = cache_prune()
         out["disk_cache_after"] = cache_stats()
     return out
+
+
+async def run_daily_pipeline(
+    symbols: list[str] | None = None,
+    *,
+    timeframe: str = "1D",
+    top_n: int = 5,
+    data_source: str = "auto",
+    min_rr: float = 1.5,
+    max_hold: int = 20,
+    cost_pct: float = 0.002,
+    log_to_journal: bool = True,
+    store_prices: bool = True,
+    save_html: bool = True,
+) -> dict[str, Any]:
+    """Scan → rank → journal → track outcomes → HTML dashboard (see daily_pipeline)."""
+    from .daily_pipeline import run_pipeline
+
+    syms = [s.strip().upper() for s in (symbols or BIST30_DEFAULT) if s.strip()]
+
+    async def load(sym: str) -> dict[str, Any]:
+        return await _resolve_bars(None, None, None, None, sym, timeframe, 300, data_source)
+
+    try:
+        res = await run_pipeline(
+            syms, load, timeframe=timeframe, top_n=int(top_n), min_rr=float(min_rr),
+            max_hold=int(max_hold), cost_pct=float(cost_pct),
+            log_to_journal=bool(log_to_journal), store_prices=bool(store_prices),
+            html_dir=_forecast_output_dir() if save_html else None,
+        )
+    except (TypeError, ValueError, OSError) as e:
+        return {"error": "pipeline_failed", "detail": str(e)}
+    return {"source": "bist-trader-mcp — daily_pipeline", **res}

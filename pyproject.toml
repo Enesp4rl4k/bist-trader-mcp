@@ -73,6 +73,7 @@ Repository = "https://github.com/Enesp4rl4k/bist-trader-mcp"
 
 [project.scripts]
 bist-trader-mcp = "bist_trader_mcp.__main__:main"
+bist-trader-daily = "bist_trader_mcp.daily_pipeline:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/bist_trader_mcp"]
@@ -97,6 +98,7 @@ select = ["E", "F", "I", "B", "UP", "N"]
 "src/bist_trader_mcp/realized_vol.py" = ["E702"]
 "src/bist_trader_mcp/server.py" = ["E501"]
 "src/bist_trader_mcp/forecast_chart.py" = ["E501"]
+"src/bist_trader_mcp/daily_pipeline.py" = ["E501"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

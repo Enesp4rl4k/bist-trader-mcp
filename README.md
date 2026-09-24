@@ -107,7 +107,19 @@ get_kap_disclosures(company="THYAO")            # fundamental layer (after check
 | `backtest_price_action_universe` | Same over many symbols (default ≈BIST30), pooled — the sample size you need before trusting a factor |
 | `evaluate_forecast_accuracy` | Does the forecast band hold? p10–p90 coverage (target ~80%), direction hit rate, band width |
 
-All five take `symbol` + `timeframe` (TradingView labels: `60`, `240`, `1D`…) and pull bars **from the TradingView chart** (`data_source="auto"`); if TradingView Desktop is not reachable they fall back to Binance (crypto) or split-adjusted Yahoo daily bars (BIST). Raw `closes/highs/lows/opens` arrays also work. The forecast is model-free (block bootstrap of recent candle shapes, volatility-regime scaled) — a spread of plausible paths, not a signal.
+### Learn & run daily
+
+| Tool | Role |
+|------|-----|
+| `backtest_price_action_universe(save_weights=true)` | Learns which confluence factors to silence/boost and each setup type's track record. Fits on the first 2/3 of every symbol's history, checks the last 1/3, and only activates the weights if out-of-sample expectancy did not get worse |
+| `run_daily_pipeline` | After the close: replays earlier plans on new bars (planned → open → closed in R), scans the universe, ranks plans (forecast agreement → setup track record → R:R), logs the top N to the trade journal, stores daily prices, writes a dashboard HTML. Also a CLI for Task Scheduler / cron: `bist-trader-daily --top 5` |
+| `get_network_stats` | HTTP requests per host, retries, coalesced duplicates, disk-cache size, cached TradingView bar sets; `prune_cache=true` cleans expired files |
+
+Live analysis (`get_simple_price_action`) uses the saved weights automatically: dropped factors no longer score, and a setup type with a proven negative record (≥ 20 trades) is downgraded to **BEKLE**. Backtests always measure the unweighted engine unless asked otherwise.
+
+**Paths / env:** `BIST_PA_WEIGHTS` (weights JSON), `BIST_TRADE_JOURNAL` (journal JSON), `BIST_FORECAST_DIR` (HTML output), `BIST_PANEL_DB` (price panel), `BIST_HTTP_PER_HOST` (parallel requests per host, default 4).
+
+The analysis tools take `symbol` + `timeframe` (TradingView labels: `60`, `240`, `1D`…) and pull bars **from the TradingView chart** (`data_source="auto"`); if TradingView Desktop is not reachable they fall back to Binance (crypto) or split-adjusted Yahoo daily bars (BIST). Raw `closes/highs/lows/opens` arrays also work. The forecast is model-free (block bootstrap of recent candle shapes, volatility-regime scaled) — a spread of plausible paths, not a signal.
 
 ------|-----|
 | `forecast_next_candles` | "30 possible futures": reads the last 360 candles, draws the next 24 one at a time, 30 times. Returns Up %/Down %, mean forecast, lowest→highest run range, volatility amplification, a Turkish summary and a dark HTML chart (`html_path`) |

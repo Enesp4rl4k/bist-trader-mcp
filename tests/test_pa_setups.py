@@ -121,3 +121,15 @@ def test_build_setup_candidates_sweep():
     )
     assert any(c["setup_type"] == "ssl_sweep_long" for c in candidates)
 
+
+
+def test_pick_best_setup_skips_wrong_side_targets():
+    conf = {"score": 80, "factors": []}
+    inverted = {"direction": "long", "setup_type": "ote_retest_long",
+                "entry": 748.9, "stop": 683.0, "targets": [521.1]}
+    ok = {"direction": "long", "setup_type": "trend_retest",
+          "entry": 100.0, "stop": 98.0, "targets": [105.0]}
+    assert pick_best_setup([inverted], conf, min_confluence=50) is None
+    assert pick_best_setup([inverted, ok], conf, min_confluence=50)["setup_type"] == "trend_retest"
+    short_bad = {"direction": "short", "entry": 100.0, "stop": 102.0, "targets": [101.0]}
+    assert pick_best_setup([short_bad], conf, min_confluence=50) is None

@@ -107,6 +107,7 @@ from .tools import (
     portfolio_risk_check,
     rank_equity_universe,
     render_pine_recipe,
+    run_daily_pipeline,
     run_market_assistant,
     run_scenario_assistant,
     run_trade_assistant,
@@ -1772,6 +1773,41 @@ _BT_PROPS = {
         "description": "One-way cost (commission+slippage) as fraction of price",
     },
 }
+
+_register(
+    "run_daily_pipeline",
+    description=(
+        "DAILY LOOP: scan a universe (default ≈BIST30) with simple PA + candle "
+        "forecast on TradingView bars, rank plans (forecast agreement, learned setup "
+        "track record, R:R, confluence), log the top N to the trade journal, replay "
+        "earlier pipeline plans on new bars (planned → open → closed in R, stop wins "
+        "ties), store daily prices in the panel DB, and write an HTML dashboard. "
+        "Run once after the close; also available as the `bist-trader-daily` CLI."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "symbols": {"type": "array", "items": {"type": "string"}},
+            "timeframe": _OHLC_PROPS["timeframe"],
+            "data_source": _OHLC_PROPS["data_source"],
+            "top_n": {"type": "integer", "default": 5},
+            "min_rr": {"type": "number", "default": 1.5},
+            "max_hold": {"type": "integer", "default": 20},
+            "log_to_journal": {"type": "boolean", "default": True},
+            "save_html": {"type": "boolean", "default": True},
+        },
+    },
+    handler=lambda args: run_daily_pipeline(
+        symbols=args.get("symbols"),
+        timeframe=args.get("timeframe") or "1D",
+        data_source=args.get("data_source", "auto"),
+        top_n=int(args.get("top_n", 5)),
+        min_rr=float(args.get("min_rr", 1.5)),
+        max_hold=int(args.get("max_hold", 20)),
+        log_to_journal=bool(args.get("log_to_journal", True)),
+        save_html=bool(args.get("save_html", True)),
+    ),
+)
 
 _register(
     "get_network_stats",
