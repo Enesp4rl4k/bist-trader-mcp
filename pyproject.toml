@@ -96,6 +96,7 @@ select = ["E", "F", "I", "B", "UP", "N"]
 "src/bist_trader_mcp/portfolio_opt.py" = ["N803", "N806"]
 "src/bist_trader_mcp/realized_vol.py" = ["E702"]
 "src/bist_trader_mcp/server.py" = ["E501"]
+"src/bist_trader_mcp/forecast_chart.py" = ["E501"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

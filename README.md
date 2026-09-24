@@ -92,6 +92,15 @@ get_kap_disclosures(company="THYAO")            # fundamental layer (after check
 | `design_scenario_trade_plan` | Plan + playbook (requires OHLCV) |
 | `get_market_profile` | HTF/LTF and thresholds |
 
+### Simple views (start here)
+
+| Tool | Role |
+|------|-----|
+| `forecast_next_candles` | "30 possible futures": reads the last 360 candles, draws the next 24 one at a time, 30 times. Returns Up %/Down %, mean forecast, lowest→highest run range, volatility amplification, a Turkish summary and a dark HTML chart (`html_path`) |
+| `get_simple_price_action` | Price action in ~10 fields: trend, nearest support/resistance, last break, cheap/expensive zone, **AL / SAT / BEKLE** + at most one plan (entry/stop/target/R:R) |
+
+Both accept `symbol` (BIST ticker or crypto pair) or raw `closes/highs/lows/opens` arrays. The forecast is model-free (block bootstrap of recent candle shapes, volatility-regime scaled) — a spread of plausible paths, not a signal.
+
 ---
 
 ## Overview

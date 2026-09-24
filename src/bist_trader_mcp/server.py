@@ -52,6 +52,7 @@ from .tools import (
     evaluate_signal_accuracy,
     find_viop_spread_opportunities,
     fit_yield_curve_nss,
+    forecast_next_candles,
     get_bist_eod_ohlcv,
     get_bist_sector_rotation,
     get_bist_snapshot,
@@ -78,6 +79,7 @@ from .tools import (
     get_mkk_market_stats,
     get_news_headlines,
     get_repo_curve,
+    get_simple_price_action,
     get_tcmb_policy_rates,
     get_trade_playbook_rules,
     get_turib_endeks_overview,
@@ -1657,6 +1659,88 @@ _register(
         atr=float(args["atr"]),
         atr_multiple_stop=float(args.get("atr_multiple_stop", 2.0)),
         risk_per_trade_pct=float(args.get("risk_per_trade_pct", 1.0)),
+    ),
+)
+
+# --- Simple views (start here) ---------------------------------------------
+
+_OHLC_PROPS = {
+    "symbol": {
+        "type": "string",
+        "description": "BIST ticker (THYAO) or crypto pair (BTCUSDT / BINANCE:BTCUSDT). "
+        "Used when closes/highs/lows are not supplied.",
+    },
+    "interval": {"type": "string", "default": "1d", "description": "Crypto only: 1h,4h,1d…"},
+    "closes": {"type": "array", "items": {"type": "number"}},
+    "highs": {"type": "array", "items": {"type": "number"}},
+    "lows": {"type": "array", "items": {"type": "number"}},
+    "opens": {"type": "array", "items": {"type": "number"}},
+}
+
+_register(
+    "forecast_next_candles",
+    description=(
+        "SIMPLE: '30 possible futures' candle forecast (Kronos-style view). Reads the "
+        "last `context` candles, draws the next `horizon` candles one at a time, "
+        "`n_paths` times. Returns Up%/Down% (runs ending above/below last close), "
+        "mean forecast, lowest→highest run range, volatility amplification and a "
+        "Turkish summary; saves a dark HTML chart (html_path). Pass a symbol or OHLC "
+        "arrays. Probability spread, not a signal."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            **_OHLC_PROPS,
+            "horizon": {"type": "integer", "default": 24},
+            "n_paths": {"type": "integer", "default": 30},
+            "context": {"type": "integer", "default": 360},
+            "seed": {"type": "integer"},
+            "drift": {"type": "string", "enum": ["historical", "zero"], "default": "historical"},
+            "save_html": {"type": "boolean", "default": True},
+            "include_paths": {"type": "boolean", "default": False},
+        },
+    },
+    handler=lambda args: forecast_next_candles(
+        closes=args.get("closes"),
+        highs=args.get("highs"),
+        lows=args.get("lows"),
+        opens=args.get("opens"),
+        symbol=args.get("symbol"),
+        interval=args.get("interval", "1d"),
+        horizon=int(args.get("horizon", 24)),
+        n_paths=int(args.get("n_paths", 30)),
+        context=int(args.get("context", 360)),
+        seed=args.get("seed"),
+        drift=args.get("drift", "historical"),
+        save_html=bool(args.get("save_html", True)),
+        include_paths=bool(args.get("include_paths", False)),
+    ),
+)
+
+_register(
+    "get_simple_price_action",
+    description=(
+        "SIMPLE: plain-language price action in ~10 fields — trend (yükseliş/düşüş/"
+        "yatay), nearest support & resistance with distance %, last break event, "
+        "cheap/expensive zone, verdict AL/SAT/BEKLE with one-line reason and at most "
+        "one plan (entry/stop/target/R:R). Use this first; use analyze_price_action "
+        "only when the full FVG/OB/sweep detail is needed."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            **_OHLC_PROPS,
+            "min_rr": {"type": "number", "default": 1.5},
+        },
+    },
+    handler=lambda args: get_simple_price_action(
+        closes=args.get("closes"),
+        highs=args.get("highs"),
+        lows=args.get("lows"),
+        opens=args.get("opens"),
+        symbol=args.get("symbol"),
+        interval=args.get("interval", "1d"),
+        min_rr=float(args.get("min_rr", 1.5)),
     ),
 )
 

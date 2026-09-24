@@ -8,7 +8,9 @@ them instead of receiving an opaque exception.
 from __future__ import annotations
 
 import math
+import os
 from datetime import date, timedelta
+from pathlib import Path
 from typing import Any
 
 from ._wip import wip_payload
@@ -3851,3 +3853,138 @@ def apply_trade_to_chart(
         }
     except Exception as e:
         return {"error": "tv_bridge_failed", "detail": str(e)}
+
+
+# --- Simple views: candle forecast + plain price action -------------------
+
+
+async def _load_ohlcv_for_symbol(
+    symbol: str, interval: str = "1d", limit: int = 400
+) -> dict[str, list[float]]:
+    """OHLCV for a symbol: Binance for crypto pairs, Yahoo EOD for BIST."""
+    sym = symbol.strip().upper()
+    is_crypto = sym.startswith("BINANCE:") or sym.endswith(("USDT", "USDC", "BUSD", "BTC"))
+    if is_crypto:
+        klines = await fetch_binance_klines(
+            symbol=sym.split(":", 1)[-1], interval=interval, limit=limit
+        )
+        rows = [(k.open, k.high, k.low, k.close, k.volume) for k in klines]
+    else:
+        days = max(400, int(limit * 1.6))
+        since = (date.today() - timedelta(days=days)).isoformat()
+        bars = await fetch_eod_ohlcv(sym.split(":", 1)[-1], since=since)
+        rows = [
+            (b.open, b.high, b.low, b.close, b.volume or 0.0)
+            for b in bars
+            if None not in (b.open, b.high, b.low, b.close)
+        ][-limit:]
+    return {
+        "opens": [float(r[0]) for r in rows],
+        "highs": [float(r[1]) for r in rows],
+        "lows": [float(r[2]) for r in rows],
+        "closes": [float(r[3]) for r in rows],
+        "volumes": [float(r[4]) for r in rows],
+    }
+
+
+async def _resolve_bars(
+    closes: list[float] | None,
+    highs: list[float] | None,
+    lows: list[float] | None,
+    opens: list[float] | None,
+    symbol: str | None,
+    interval: str,
+    limit: int,
+) -> dict[str, Any]:
+    if closes and highs and lows:
+        return {"closes": closes, "highs": highs, "lows": lows, "opens": opens, "volumes": None}
+    if not symbol:
+        raise ValueError("pass closes/highs/lows or a symbol")
+    return await _load_ohlcv_for_symbol(symbol, interval=interval, limit=limit)
+
+
+def _forecast_output_dir() -> Path:
+    override = os.environ.get("BIST_FORECAST_DIR")
+    if override:
+        return Path(override)
+    from .data_store import default_db_path
+
+    return default_db_path().parent / "forecasts"
+
+
+async def forecast_next_candles(
+    closes: list[float] | None = None,
+    highs: list[float] | None = None,
+    lows: list[float] | None = None,
+    opens: list[float] | None = None,
+    *,
+    symbol: str | None = None,
+    interval: str = "1d",
+    horizon: int = 24,
+    n_paths: int = 30,
+    context: int = 360,
+    seed: int | None = None,
+    drift: str = "historical",
+    save_html: bool = True,
+    include_paths: bool = False,
+) -> dict[str, Any]:
+    """'N possible futures' candle forecast + optional HTML chart."""
+    from .candle_forecast import forecast_candles
+    from .forecast_chart import render_forecast_html
+
+    try:
+        bars = await _resolve_bars(
+            closes, highs, lows, opens, symbol, interval, max(context + 1, 120)
+        )
+        fc = forecast_candles(
+            bars["closes"], bars["highs"], bars["lows"], bars.get("opens"),
+            horizon=int(horizon), n_paths=int(n_paths), context=int(context),
+            seed=seed, drift=drift, include_paths=include_paths,
+        )
+    except SourceError as e:
+        return {"error": "data_error", "detail": str(e)}
+    except (TypeError, ValueError) as e:
+        return {"error": "bad_input", "detail": str(e)}
+
+    out: dict[str, Any] = {"source": "bist-trader-mcp — candle_forecast", "symbol": symbol, **fc}
+    if save_html:
+        page = render_forecast_html(
+            fc, bars["closes"], bars["highs"], bars["lows"], bars.get("opens"),
+            symbol=symbol or "",
+        )
+        try:
+            folder = _forecast_output_dir()
+            folder.mkdir(parents=True, exist_ok=True)
+            safe = "".join(ch if ch.isalnum() else "_" for ch in (symbol or "series"))
+            path = folder / f"{safe}_{date.today().isoformat()}.html"
+            path.write_text(page, encoding="utf-8")
+            out["html_path"] = str(path)
+        except OSError as e:
+            out["html_error"] = str(e)
+    return out
+
+
+async def get_simple_price_action(
+    closes: list[float] | None = None,
+    highs: list[float] | None = None,
+    lows: list[float] | None = None,
+    opens: list[float] | None = None,
+    *,
+    symbol: str | None = None,
+    interval: str = "1d",
+    min_rr: float = 1.5,
+) -> dict[str, Any]:
+    """Plain-language PA: trend, nearest S/R, last event, AL/SAT/BEKLE, one plan."""
+    from .pa_simple import simple_price_action
+
+    try:
+        bars = await _resolve_bars(closes, highs, lows, opens, symbol, interval, 300)
+        res = simple_price_action(
+            bars["closes"], bars["highs"], bars["lows"], bars.get("opens"),
+            volumes=bars.get("volumes"), min_rr=float(min_rr),
+        )
+    except SourceError as e:
+        return {"error": "data_error", "detail": str(e)}
+    except (TypeError, ValueError) as e:
+        return {"error": "bad_input", "detail": str(e)}
+    return {"source": "bist-trader-mcp — pa_simple", "symbol": symbol, **res}
