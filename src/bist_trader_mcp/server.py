@@ -83,6 +83,7 @@ from .tools import (
     get_news_headlines,
     get_repo_curve,
     get_simple_price_action,
+    get_network_stats,
     get_tcmb_policy_rates,
     get_trade_playbook_rules,
     get_turib_endeks_overview,
@@ -1773,6 +1774,20 @@ _BT_PROPS = {
 }
 
 _register(
+    "get_network_stats",
+    description=(
+        "Diagnostics: HTTP request counts per host, retries, coalesced duplicate "
+        "requests, fail-fast 4xx, errors per source, disk cache size and cached "
+        "TradingView bar sets. `prune_cache=true` deletes expired cache files."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {"prune_cache": {"type": "boolean", "default": False}},
+    },
+    handler=lambda args: get_network_stats(prune_cache=bool(args.get("prune_cache", False))),
+)
+
+_register(
     "backtest_price_action",
     description=(
         "MEASURE: walk-forward backtest of get_simple_price_action AL/SAT plans on one "
@@ -1888,6 +1903,12 @@ _register(
             "lows": {"type": "array", "items": {"type": "number"}},
             "swing_lookback": {"type": "integer", "default": 5},
             "sr_tolerance_pct": {"type": "number", "default": 0.003},
+            "detail": {
+                "type": "boolean",
+                "default": False,
+                "description": "Include raw OB/breaker lists and duplicated panels "
+                "(~2x larger output).",
+            },
         },
     },
     handler=lambda args: analyze_price_action(
@@ -1896,6 +1917,7 @@ _register(
         lows=args.get("lows") or [],
         swing_lookback=int(args.get("swing_lookback", 5)),
         sr_tolerance_pct=float(args.get("sr_tolerance_pct", 0.003)),
+        detail=bool(args.get("detail", False)),
     ),
 )
 
@@ -3167,7 +3189,31 @@ async def _call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     except Exception as e:  # surface unexpected errors as structured payload
         result = {"error": "tool_failed", "detail": f"{type(e).__name__}: {e}"}
 
-    return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, default=str))]
+    return [TextContent(type="text", text=encode_result(result))]
+
+
+def _compact_numbers(x: Any) -> Any:
+    """Trim float noise (113.92720399182 → 113.9272) to save LLM context tokens.
+
+    |x| >= 1000 keeps 2 decimals (prices like BTC stay exact to the cent);
+    smaller values keep 6 significant digits (enough for FX pips and tiny coins).
+    """
+    if isinstance(x, float):
+        if x != x or x in (float("inf"), float("-inf")):
+            return None
+        return round(x, 2) if abs(x) >= 1000 else float(f"{x:.6g}")
+    if isinstance(x, dict):
+        return {k: _compact_numbers(v) for k, v in x.items()}
+    if isinstance(x, (list, tuple)):
+        return [_compact_numbers(v) for v in x]
+    return x
+
+
+def encode_result(result: Any) -> str:
+    """JSON for the MCP client: compact separators + trimmed floats."""
+    return json.dumps(
+        _compact_numbers(result), ensure_ascii=False, default=str, separators=(",", ":")
+    )
 
 
 # ---------------------------------------------------------------------------

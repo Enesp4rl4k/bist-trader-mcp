@@ -79,6 +79,10 @@ def cache_get(key: str, ttl_seconds: int) -> Any | None:
 
 def cache_set(key: str, value: Any, ttl_seconds: int) -> None:
     """Persist `value` to the cache file."""
+    global _pruned
+    if not _pruned:
+        _pruned = True
+        cache_prune()
     path = cache_path_for(key)
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -90,3 +94,49 @@ def cache_set(key: str, value: Any, ttl_seconds: int) -> None:
     with tmp.open("w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, default=str)
     os.replace(tmp, path)
+
+
+_pruned = False
+
+
+def cache_prune(grace_seconds: int = 24 * 3600) -> dict[str, int]:
+    """Delete entries whose TTL expired more than ``grace_seconds`` ago.
+
+    Keeps the cache directory from growing forever; runs automatically once per
+    process on the first ``cache_set``.
+    """
+    root = _cache_root()
+    removed = kept = 0
+    if not root.is_dir():
+        return {"removed": 0, "kept": 0}
+    now = datetime.now(timezone.utc)
+    for path in root.glob("*.json"):
+        try:
+            with path.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+            saved_at = datetime.fromisoformat(data["saved_at"])
+            if saved_at.tzinfo is None:
+                saved_at = saved_at.replace(tzinfo=timezone.utc)
+            age = (now - saved_at).total_seconds()
+            expired = age > int(data.get("ttl_seconds") or 0) + grace_seconds
+        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+            expired = True  # unreadable / corrupt entry
+        if expired:
+            try:
+                path.unlink()
+                removed += 1
+            except OSError:
+                pass
+        else:
+            kept += 1
+    return {"removed": removed, "kept": kept}
+
+
+def cache_stats() -> dict[str, Any]:
+    root = _cache_root()
+    files = list(root.glob("*.json")) if root.is_dir() else []
+    return {
+        "path": str(root),
+        "entries": len(files),
+        "size_kb": round(sum(p.stat().st_size for p in files) / 1024, 1),
+    }

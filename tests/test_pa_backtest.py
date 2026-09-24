@@ -18,6 +18,13 @@ from bist_trader_mcp.pa_simple import simple_price_action
 from .test_candle_forecast import _series
 
 
+@pytest.fixture(autouse=True)
+def _fresh_bar_cache():
+    tools._BARS_CACHE.clear()
+    yield
+    tools._BARS_CACHE.clear()
+
+
 def test_same_bar_stop_and_target_counts_as_stop():
     opens, highs, lows, closes = [100, 100], [100, 110], [100, 90], [100, 100]
     bar, px, reason = _exit("long", 1, 95.0, 105.0, True, opens, highs, lows, closes, 5)
@@ -155,3 +162,20 @@ def test_backtest_tool_end_to_end(monkeypatch):
     assert uni["symbols_tested"] == 2
     ev = asyncio.run(tools.evaluate_forecast_accuracy(symbol="X"))
     assert "p10_p90_coverage_pct" in ev
+
+
+def test_bar_cache_avoids_second_tradingview_pull(monkeypatch):
+    import bist_trader_mcp.tv_tools as tvt
+
+    calls = []
+
+    def fake(*a, **k):
+        calls.append(a)
+        return {"success": True, "bars": _fake_bars(500), "symbol_tv": "BIST:X"}
+
+    monkeypatch.setattr(tvt, "tv_fetch_ohlcv", fake)
+    a = asyncio.run(tools._resolve_bars(None, None, None, None, "X", "1D", 300))
+    b = asyncio.run(tools._resolve_bars(None, None, None, None, "x", "1d", 500))
+    assert len(calls) == 1
+    assert len(a["closes"]) == 300 and len(b["closes"]) == 500
+    assert a["closes"] == b["closes"][-300:]

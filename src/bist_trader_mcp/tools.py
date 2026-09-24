@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import math
 import os
+import time
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
@@ -3054,10 +3055,16 @@ def analyze_price_action(
     lows: list[float],
     swing_lookback: int = 5,
     sr_tolerance_pct: float = 0.003,
+    detail: bool = False,
 ) -> dict[str, Any]:
-    """Swing structure, S/R clusters, bias, and suggested long/short setups."""
+    """Swing structure, S/R clusters, bias, and suggested long/short setups.
+
+    ``detail=False`` drops panels that are duplicated elsewhere in the payload
+    (``imbalances`` == ``fvg``; structure_detail copies of events/leg/sweeps) and
+    the raw OB/breaker lists — roughly halves the tokens sent to the model.
+    """
     try:
-        return {
+        out = {
             "source": "bist-trader-mcp — price_action.analyze_price_action",
             **_analyze_price_action(
                 closes=closes or [],
@@ -3069,6 +3076,16 @@ def analyze_price_action(
         }
     except (TypeError, ValueError) as e:
         return {"error": "bad_input", "detail": str(e)}
+    if not detail:
+        for k in ("imbalances", "raw_obs", "raw_breakers"):
+            out.pop(k, None)
+        sd = out.get("structure_detail")
+        if isinstance(sd, dict):
+            out["structure_detail"] = {
+                k: v for k, v in sd.items()
+                if k not in ("structure_events", "swing_leg", "sweeps")
+            }
+    return out
 
 
 def analyze_range_imbalance(
@@ -3880,7 +3897,8 @@ async def _load_ohlcv_public(
         klines = await fetch_binance_klines(
             symbol=sym.split(":", 1)[-1], interval=interval, limit=limit
         )
-        rows = [(k.open, k.high, k.low, k.close, k.volume) for k in klines]
+        rows = [(k.open, k.high, k.low, k.close, k.volume, k.open_time_ms // 1000)
+                for k in klines]
     else:
         if tf not in ("1D", "D"):
             raise ValueError(
@@ -3891,7 +3909,7 @@ async def _load_ohlcv_public(
         since = (date.today() - timedelta(days=days)).isoformat()
         bars = await fetch_eod_ohlcv(sym.split(":", 1)[-1], since=since, adjusted=True)
         rows = [
-            (b.open, b.high, b.low, b.close, b.volume or 0.0)
+            (b.open, b.high, b.low, b.close, b.volume or 0.0, _date_to_unix(b.date))
             for b in bars
             if None not in (b.open, b.high, b.low, b.close)
         ][-limit:]
@@ -3901,7 +3919,14 @@ async def _load_ohlcv_public(
         "lows": [float(r[2]) for r in rows],
         "closes": [float(r[3]) for r in rows],
         "volumes": [float(r[4]) for r in rows],
+        "times": [int(r[5]) for r in rows],
     }
+
+
+def _date_to_unix(d: str) -> int:
+    from datetime import datetime, timezone
+
+    return int(datetime.fromisoformat(d).replace(tzinfo=timezone.utc).timestamp())
 
 
 async def _resolve_bars(
@@ -3924,20 +3949,62 @@ async def _resolve_bars(
                 "volumes": None, "data_source": "caller"}
     if not symbol:
         raise ValueError("pass closes/highs/lows or a symbol")
+    key = (symbol.strip().upper(), timeframe.strip().upper(), data_source)
+    hit = _bars_cache_get(key, timeframe)
+    if hit is not None and len(hit["closes"]) >= min(limit, _TV_MAX_BARS):
+        return _slice_bars(hit, limit)
     tv_error = None
     if data_source in ("auto", "tradingview"):
         from .tv_tools import tv_fetch_ohlcv
 
-        tv = await asyncio.to_thread(tv_fetch_ohlcv, symbol, timeframe, min(limit, 500))
+        # Always pull the TV maximum: switching the chart is the slow part, and
+        # one full pull serves every later request for this symbol/timeframe.
+        tv = await asyncio.to_thread(tv_fetch_ohlcv, symbol, timeframe, _TV_MAX_BARS)
         if tv.get("success"):
-            return {**tv["bars"], "data_source": "tradingview", "symbol_tv": tv["symbol_tv"]}
+            out = {**tv["bars"], "data_source": "tradingview", "symbol_tv": tv["symbol_tv"]}
+            _BARS_CACHE[key] = (time.monotonic(), out)
+            return _slice_bars(out, limit)
         tv_error = f"{tv.get('error')}: {tv.get('detail')}"
         if data_source == "tradingview":
             raise ValueError(f"TradingView unavailable ({tv_error})")
-    bars = await _load_ohlcv_public(symbol, timeframe=timeframe, limit=limit)
-    out: dict[str, Any] = {**bars, "data_source": "public"}
+    bars = await _load_ohlcv_public(symbol, timeframe=timeframe, limit=max(limit, _TV_MAX_BARS))
+    out = {**bars, "data_source": "public"}
     if tv_error:
         out["tradingview_error"] = tv_error
+    _BARS_CACHE[key] = (time.monotonic(), out)
+    return _slice_bars(out, limit)
+
+
+_TV_MAX_BARS = 500
+_BARS_CACHE: dict[tuple[str, str, str], tuple[float, dict[str, Any]]] = {}
+
+
+def _bars_ttl(timeframe: str) -> float:
+    from .tv_tools import timeframe_to_seconds
+
+    secs = timeframe_to_seconds(timeframe) or 86_400
+    if secs <= 900:
+        return 60.0
+    if secs < 86_400:
+        return 300.0
+    return 900.0
+
+
+def _bars_cache_get(key: tuple[str, str, str], timeframe: str) -> dict[str, Any] | None:
+    item = _BARS_CACHE.get(key)
+    if item is None:
+        return None
+    ts, bars = item
+    if time.monotonic() - ts > _bars_ttl(timeframe):
+        _BARS_CACHE.pop(key, None)
+        return None
+    return bars
+
+
+def _slice_bars(bars: dict[str, Any], limit: int) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for k, v in bars.items():
+        out[k] = v[-limit:] if isinstance(v, list) and limit > 0 else v
     return out
 
 
@@ -4234,3 +4301,25 @@ async def evaluate_forecast_accuracy(
         "data_source": data.get("data_source"),
         **res,
     }
+
+
+def get_network_stats(prune_cache: bool = False) -> dict[str, Any]:
+    """HTTP counters, disk cache size and in-memory bar cache entries."""
+    from ._cache import cache_prune, cache_stats
+    from .http_utils import network_stats
+
+    out: dict[str, Any] = {
+        "source": "bist-trader-mcp — network stats",
+        "http": network_stats(),
+        "disk_cache": cache_stats(),
+        "bar_cache": [
+            {"symbol": k[0], "timeframe": k[1], "data_source": v[1].get("data_source"),
+             "bars": len(v[1].get("closes") or []),
+             "age_sec": round(time.monotonic() - v[0])}
+            for k, v in _BARS_CACHE.items()
+        ],
+    }
+    if prune_cache:
+        out["pruned"] = cache_prune()
+        out["disk_cache_after"] = cache_stats()
+    return out

@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any
 
+from ._cache import cache_get, cache_set
 from .http_utils import SourceError, fetch_json
 
 
@@ -31,6 +32,9 @@ class OHLCVBar:
     volume: float | None
     ticker: str
 
+
+EOD_HISTORY_TTL = 7 * 24 * 3600
+EOD_LIVE_TTL = 15 * 60
 
 YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
 
@@ -80,7 +84,14 @@ async def fetch_eod_ohlcv(
         "events": "history",
         "includeAdjustedClose": "true",
     }
-    payload = await fetch_json(url, params=params, source="yahoo")
+    # Closed history never changes → cache for a week; a window that includes
+    # today can still print a new bar → 15 minutes.
+    key = f"yahoo.eod:{symbol}:{since_date}:{until_date}"
+    ttl = EOD_HISTORY_TTL if until_date < date.today() else EOD_LIVE_TTL
+    payload = cache_get(key, ttl_seconds=ttl)
+    if payload is None:
+        payload = await fetch_json(url, params=params, source="yahoo")
+        cache_set(key, payload, ttl_seconds=ttl)
     return _parse_yahoo_chart(payload, ticker=symbol, adjusted=adjusted)
 
 
