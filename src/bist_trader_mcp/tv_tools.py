@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 import time
 from typing import Any
 
@@ -11,6 +12,7 @@ from .tv_bridge import tv_call, tv_mcp_root
 def _bars_from_ohlcv(res: dict[str, Any]) -> dict[str, list[float]]:
     bars = res.get("bars") or []
     return {
+        "opens": [float(b.get("open", b["close"])) for b in bars],
         "closes": [float(b["close"]) for b in bars],
         "highs": [float(b["high"]) for b in bars],
         "lows": [float(b["low"]) for b in bars],
@@ -198,6 +200,51 @@ def tv_read_chart_bars(count: int = 200) -> dict[str, list[float]]:
     """OHLCV from the *current* chart symbol + timeframe (for draw time sync)."""
     raw = tv_data_get_ohlcv(count=count)
     return _bars_from_ohlcv(raw)
+
+
+def tv_fetch_ohlcv(
+    symbol: str,
+    timeframe: str = "1D",
+    count: int = 500,
+    market: str | None = None,
+) -> dict[str, Any]:
+    """Set chart symbol + timeframe and pull up to 500 OHLCV bars (with opens).
+
+    Returns ``{"success": True, "bars": {opens, highs, lows, closes, volumes,
+    times}, "symbol_tv", "timeframe_check"}`` or an error payload.
+    """
+    from .market_profiles import detect_asset_class, normalize_tv_symbol
+
+    try:
+        sym_tv = normalize_tv_symbol(symbol, detect_asset_class(symbol, market))
+        sym = tv_chart_set_symbol(sym_tv)
+        if sym.get("success") is False:
+            return {"success": False, "error": sym.get("error") or "set_symbol_failed",
+                    "detail": sym.get("detail")}
+        tv_chart_set_timeframe(timeframe)
+        time.sleep(1.5)
+        raw = tv_data_get_ohlcv(count=count)
+        bars = _bars_from_ohlcv(raw)
+        check = verify_bar_timeframe(bars.get("times") or [], timeframe)
+        if check.get("checked") and not check.get("ok"):
+            time.sleep(2.0)
+            raw = tv_data_get_ohlcv(count=count)
+            bars = _bars_from_ohlcv(raw)
+            check = verify_bar_timeframe(bars.get("times") or [], timeframe)
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as e:
+        # node / tradingview-mcp missing, or malformed bars
+        return {"success": False, "error": "tv_unavailable", "detail": str(e)}
+    if not bars["closes"]:
+        return {"success": False, "error": raw.get("error") or "no_bars",
+                "detail": raw.get("detail")}
+    return {
+        "success": True,
+        "source": "TradingView",
+        "symbol_tv": sym_tv,
+        "timeframe": timeframe,
+        "bars": bars,
+        "timeframe_check": check,
+    }
 
 
 def tv_fetch_mtf_ohlcv(

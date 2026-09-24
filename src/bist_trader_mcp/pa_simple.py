@@ -63,8 +63,13 @@ def simple_price_action(
     *,
     volumes: list[float] | None = None,
     min_rr: float = 1.5,
+    debug: bool = False,
 ) -> dict[str, Any]:
-    """Plain-language price action summary (trend, levels, verdict, one plan)."""
+    """Plain-language price action summary (trend, levels, verdict, one plan).
+
+    ``debug=True`` adds a ``debug`` block (confluence score, factors, setup type)
+    used by the walk-forward backtest for factor attribution.
+    """
     pa = analyze_price_action(closes, highs, lows, opens=opens, volumes=volumes)
     price = float(pa["current_price"])
     structure = pa["market_structure"]
@@ -126,7 +131,7 @@ def simple_price_action(
         lines.append(f"Fiyat son salınımın {zone} kısmında.")
     lines.append(f"Karar: {verdict} — {why}")
 
-    return {
+    out: dict[str, Any] = {
         "price": price,
         "trend": trend,
         "trend_strength": strength_tr,
@@ -139,6 +144,21 @@ def simple_price_action(
         "plan": plan,
         "summary_tr": " ".join(lines),
     }
+    if debug:
+        raw = None
+        if plan:
+            key = "suggested_long_setup" if plan["direction"] == "long" else "suggested_short_setup"
+            raw = pa.get(key) or {}
+        conf = (raw or {}).get("confluence") or {}
+        out["debug"] = {
+            "structure": structure,
+            "setup_type": (raw or {}).get("setup_type"),
+            "entry_style": (raw or {}).get("entry_style"),
+            "confluence_score": conf.get("score"),
+            "factors": list(conf.get("factors") or []),
+            "atr_14": pa.get("atr_14"),
+        }
+    return out
 
 
 __all__ = ["simple_price_action"]

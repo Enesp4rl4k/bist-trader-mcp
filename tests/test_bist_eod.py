@@ -49,3 +49,39 @@ def test_period_start_supports_common_yahoo_ranges():
 def test_period_start_rejects_unknown_period():
     with pytest.raises(SourceError):
         _period_start(date(2026, 6, 4), "3w")
+
+
+def _split_payload():
+    return {
+        "chart": {
+            "result": [
+                {
+                    "timestamp": [1_700_000_000, 1_700_086_400],
+                    "indicators": {
+                        "quote": [
+                            {
+                                "open": [100.0, 51.0],
+                                "high": [102.0, 52.0],
+                                "low": [98.0, 49.0],
+                                "close": [100.0, 50.0],
+                                "volume": [1000, 2000],
+                            }
+                        ],
+                        "adjclose": [{"adjclose": [50.0, 50.0]}],
+                    },
+                }
+            ],
+            "error": None,
+        }
+    }
+
+
+def test_yahoo_parser_adjusts_for_split():
+    raw = _parse_yahoo_chart(_split_payload(), ticker="X.IS")
+    assert raw[0].close == 100.0  # default: official prices
+
+    adj = _parse_yahoo_chart(_split_payload(), ticker="X.IS", adjusted=True)
+    assert adj[0].close == 50.0
+    assert adj[0].open == 50.0 and adj[0].high == 51.0 and adj[0].low == 49.0
+    assert adj[0].volume == 2000.0
+    assert adj[1].close == 50.0 and adj[1].open == 51.0

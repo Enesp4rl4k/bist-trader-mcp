@@ -54,8 +54,14 @@ async def fetch_eod_ohlcv(
     since: date | str | None = None,
     until: date | str | None = None,
     period: str | None = None,
+    adjusted: bool = False,
 ) -> list[OHLCVBar]:
-    """Fetch daily OHLCV bars for a BIST symbol."""
+    """Fetch daily OHLCV bars for a BIST symbol.
+
+    ``adjusted=True`` back-adjusts OHLC for splits/bonus issues/dividends using
+    Yahoo's ``adjclose`` — use it for technical analysis so capital increases
+    (bedelsiz) don't print fake crash candles. Default keeps official prices.
+    """
     until_date = _coerce(until) if until else date.today()
     since_date = (
         _coerce(since)
@@ -75,10 +81,10 @@ async def fetch_eod_ohlcv(
         "includeAdjustedClose": "true",
     }
     payload = await fetch_json(url, params=params, source="yahoo")
-    return _parse_yahoo_chart(payload, ticker=symbol)
+    return _parse_yahoo_chart(payload, ticker=symbol, adjusted=adjusted)
 
 
-def _parse_yahoo_chart(payload: Any, ticker: str) -> list[OHLCVBar]:
+def _parse_yahoo_chart(payload: Any, ticker: str, adjusted: bool = False) -> list[OHLCVBar]:
     """Yahoo /v8/finance/chart returns:
         chart.result[0].timestamp -> [epoch_sec, ...]
         chart.result[0].indicators.quote[0].{open,high,low,close,volume}
@@ -100,6 +106,10 @@ def _parse_yahoo_chart(payload: Any, ticker: str) -> list[OHLCVBar]:
     lows = quote.get("low") or []
     closes = quote.get("close") or []
     volumes = quote.get("volume") or []
+    adjcloses: list[Any] = []
+    if adjusted:
+        adj_block = (r0.get("indicators") or {}).get("adjclose") or [{}]
+        adjcloses = adj_block[0].get("adjclose") or []
 
     bars: list[OHLCVBar] = []
     for i, ts in enumerate(timestamps):
@@ -110,14 +120,26 @@ def _parse_yahoo_chart(payload: Any, ticker: str) -> list[OHLCVBar]:
             bar_date = datetime.fromtimestamp(int(ts)).date().isoformat()
         except (OverflowError, OSError, ValueError):
             continue
+        o = _safe_float(_at(opens, i))
+        h = _safe_float(_at(highs, i))
+        lo = _safe_float(_at(lows, i))
+        vol = _safe_float(_at(volumes, i))
+        adj = _safe_float(_at(adjcloses, i))
+        if adj is not None and adj > 0 and close > 0:
+            f = adj / close
+            o = o * f if o is not None else None
+            h = h * f if h is not None else None
+            lo = lo * f if lo is not None else None
+            vol = vol / f if vol is not None else None
+            close = adj
         bars.append(
             OHLCVBar(
                 date=bar_date,
-                open=_safe_float(_at(opens, i)),
-                high=_safe_float(_at(highs, i)),
-                low=_safe_float(_at(lows, i)),
+                open=o,
+                high=h,
+                low=lo,
                 close=close,
-                volume=_safe_float(_at(volumes, i)),
+                volume=vol,
                 ticker=ticker,
             )
         )

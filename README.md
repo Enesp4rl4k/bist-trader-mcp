@@ -99,6 +99,20 @@ get_kap_disclosures(company="THYAO")            # fundamental layer (after check
 | `forecast_next_candles` | "30 possible futures": reads the last 360 candles, draws the next 24 one at a time, 30 times. Returns Up %/Down %, mean forecast, lowest→highest run range, volatility amplification, a Turkish summary and a dark HTML chart (`html_path`) |
 | `get_simple_price_action` | Price action in ~10 fields: trend, nearest support/resistance, last break, cheap/expensive zone, **AL / SAT / BEKLE** + at most one plan (entry/stop/target/R:R) |
 
+### Measure (is it actually right?)
+
+| Tool | Role |
+|------|-----|
+| `backtest_price_action` | Walk-forward test of the AL/SAT plans on one symbol: signals from past bars only, stop wins ties, results in R after costs (win rate, expectancy, profit factor, drawdown) + which confluence factors to keep/drop |
+| `backtest_price_action_universe` | Same over many symbols (default ≈BIST30), pooled — the sample size you need before trusting a factor |
+| `evaluate_forecast_accuracy` | Does the forecast band hold? p10–p90 coverage (target ~80%), direction hit rate, band width |
+
+All five take `symbol` + `timeframe` (TradingView labels: `60`, `240`, `1D`…) and pull bars **from the TradingView chart** (`data_source="auto"`); if TradingView Desktop is not reachable they fall back to Binance (crypto) or split-adjusted Yahoo daily bars (BIST). Raw `closes/highs/lows/opens` arrays also work. The forecast is model-free (block bootstrap of recent candle shapes, volatility-regime scaled) — a spread of plausible paths, not a signal.
+
+------|-----|
+| `forecast_next_candles` | "30 possible futures": reads the last 360 candles, draws the next 24 one at a time, 30 times. Returns Up %/Down %, mean forecast, lowest→highest run range, volatility amplification, a Turkish summary and a dark HTML chart (`html_path`) |
+| `get_simple_price_action` | Price action in ~10 fields: trend, nearest support/resistance, last break, cheap/expensive zone, **AL / SAT / BEKLE** + at most one plan (entry/stop/target/R:R) |
+
 Both accept `symbol` (BIST ticker or crypto pair) or raw `closes/highs/lows/opens` arrays. The forecast is model-free (block bootstrap of recent candle shapes, volatility-regime scaled) — a spread of plausible paths, not a signal.
 
 ---

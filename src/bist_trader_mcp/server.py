@@ -29,6 +29,8 @@ from .tools import (
     analyze_swing_trade,
     apply_scenario_to_chart,
     apply_trade_to_chart,
+    backtest_price_action,
+    backtest_price_action_universe,
     backtest_strategy,
     calculate_atr_position_size,
     calculate_basis_fair_value,
@@ -49,6 +51,7 @@ from .tools import (
     design_mtf_trade_plan,
     design_scenario_trade_plan,
     design_trade_setup,
+    evaluate_forecast_accuracy,
     evaluate_signal_accuracy,
     find_viop_spread_opportunities,
     fit_yield_curve_nss,
@@ -1667,10 +1670,22 @@ _register(
 _OHLC_PROPS = {
     "symbol": {
         "type": "string",
-        "description": "BIST ticker (THYAO) or crypto pair (BTCUSDT / BINANCE:BTCUSDT). "
-        "Used when closes/highs/lows are not supplied.",
+        "description": "BIST ticker (THYAO), index (XU030) or crypto pair "
+        "(BINANCE:BTCUSDT). Bars are pulled from the TradingView chart; used "
+        "when closes/highs/lows are not supplied.",
     },
-    "interval": {"type": "string", "default": "1d", "description": "Crypto only: 1h,4h,1d…"},
+    "timeframe": {
+        "type": "string",
+        "default": "1D",
+        "description": "TradingView timeframe: 15, 60, 240, 1D, 1W…",
+    },
+    "data_source": {
+        "type": "string",
+        "enum": ["auto", "tradingview", "public"],
+        "default": "auto",
+        "description": "auto = TradingView chart first, Yahoo/Binance fallback if TV "
+        "Desktop is not reachable.",
+    },
     "closes": {"type": "array", "items": {"type": "number"}},
     "highs": {"type": "array", "items": {"type": "number"}},
     "lows": {"type": "array", "items": {"type": "number"}},
@@ -1706,7 +1721,8 @@ _register(
         lows=args.get("lows"),
         opens=args.get("opens"),
         symbol=args.get("symbol"),
-        interval=args.get("interval", "1d"),
+        timeframe=args.get("timeframe") or args.get("interval") or "1D",
+        data_source=args.get("data_source", "auto"),
         horizon=int(args.get("horizon", 24)),
         n_paths=int(args.get("n_paths", 30)),
         context=int(args.get("context", 360)),
@@ -1739,8 +1755,115 @@ _register(
         lows=args.get("lows"),
         opens=args.get("opens"),
         symbol=args.get("symbol"),
-        interval=args.get("interval", "1d"),
+        timeframe=args.get("timeframe") or args.get("interval") or "1D",
+        data_source=args.get("data_source", "auto"),
         min_rr=float(args.get("min_rr", 1.5)),
+    ),
+)
+
+_BT_PROPS = {
+    "bars": {"type": "integer", "default": 500, "description": "History length (TV max 500)"},
+    "max_hold": {"type": "integer", "default": 20, "description": "Bars before timeout exit"},
+    "min_rr": {"type": "number", "default": 1.5},
+    "cost_pct": {
+        "type": "number",
+        "default": 0.002,
+        "description": "One-way cost (commission+slippage) as fraction of price",
+    },
+}
+
+_register(
+    "backtest_price_action",
+    description=(
+        "MEASURE: walk-forward backtest of get_simple_price_action AL/SAT plans on one "
+        "symbol (TradingView bars by default). Signals use only past bars (no "
+        "look-ahead); stop wins when stop and target share a bar; results in R after "
+        "costs: win rate, expectancy, profit factor, max drawdown, by direction/trend/"
+        "setup, plus factor attribution (which confluence factors to keep/drop and "
+        "whether the confluence score ranks outcomes)."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            **_OHLC_PROPS,
+            **_BT_PROPS,
+            "include_trades": {"type": "boolean", "default": False},
+        },
+    },
+    handler=lambda args: backtest_price_action(
+        closes=args.get("closes"),
+        highs=args.get("highs"),
+        lows=args.get("lows"),
+        opens=args.get("opens"),
+        symbol=args.get("symbol"),
+        timeframe=args.get("timeframe") or "1D",
+        data_source=args.get("data_source", "auto"),
+        bars=int(args.get("bars", 500)),
+        max_hold=int(args.get("max_hold", 20)),
+        min_rr=float(args.get("min_rr", 1.5)),
+        cost_pct=float(args.get("cost_pct", 0.002)),
+        include_trades=bool(args.get("include_trades", False)),
+    ),
+)
+
+_register(
+    "backtest_price_action_universe",
+    description=(
+        "MEASURE: backtest_price_action over a list of symbols (default ≈BIST30), "
+        "one at a time on the TradingView chart, pooling all trades: pooled win "
+        "rate/expectancy, per-symbol table, and pooled factor keep/drop list. Use this "
+        "to decide which PA factors deserve weight — single-symbol samples are small."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "symbols": {"type": "array", "items": {"type": "string"}},
+            "timeframe": _OHLC_PROPS["timeframe"],
+            "data_source": _OHLC_PROPS["data_source"],
+            **_BT_PROPS,
+        },
+    },
+    handler=lambda args: backtest_price_action_universe(
+        symbols=args.get("symbols"),
+        timeframe=args.get("timeframe") or "1D",
+        data_source=args.get("data_source", "auto"),
+        bars=int(args.get("bars", 500)),
+        max_hold=int(args.get("max_hold", 20)),
+        min_rr=float(args.get("min_rr", 1.5)),
+        cost_pct=float(args.get("cost_pct", 0.002)),
+    ),
+)
+
+_register(
+    "evaluate_forecast_accuracy",
+    description=(
+        "MEASURE: walk-forward calibration of forecast_next_candles. At past points it "
+        "forecasts from prior bars only and checks the close `horizon` bars later: "
+        "p10–p90 coverage (target ~80%), full band coverage, direction hit rate and "
+        "band width. Tells whether to trust the band and/or the Up/Down %."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            **_OHLC_PROPS,
+            "bars": {"type": "integer", "default": 500},
+            "horizon": {"type": "integer", "default": 24},
+            "n_paths": {"type": "integer", "default": 30},
+            "step": {"type": "integer", "default": 10},
+        },
+    },
+    handler=lambda args: evaluate_forecast_accuracy(
+        closes=args.get("closes"),
+        highs=args.get("highs"),
+        lows=args.get("lows"),
+        opens=args.get("opens"),
+        symbol=args.get("symbol"),
+        timeframe=args.get("timeframe") or "1D",
+        data_source=args.get("data_source", "auto"),
+        bars=int(args.get("bars", 500)),
+        horizon=int(args.get("horizon", 24)),
+        n_paths=int(args.get("n_paths", 30)),
+        step=int(args.get("step", 10)),
     ),
 )
 

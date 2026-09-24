@@ -96,6 +96,19 @@ def assess_ohlcv_quality(
     if n > 0 and flat / max(n - 1, 1) > 0.35:
         issues.append(f"too many flat bars ({flat})")
 
+    # BIST daily limit is ±10%; a >25% close-to-close jump on an equity is
+    # almost always an unadjusted split / bonus issue, not a real move.
+    if asset_class in ("bist_equity", "unknown"):
+        jumps = [
+            i for i in range(1, n)
+            if closes[i - 1] > 0 and abs(closes[i] / closes[i - 1] - 1.0) > 0.25
+        ]
+        if jumps:
+            issues.append(
+                f"suspect_split: {len(jumps)} bar(s) move >25% (last at index {jumps[-1]}); "
+                "use split-adjusted prices"
+            )
+
     if volumes and len(volumes) == n:
         zero_vol = sum(1 for v in volumes if float(v) <= 0)
         if zero_vol / n > 0.25:

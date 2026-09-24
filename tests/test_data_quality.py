@@ -77,3 +77,13 @@ def test_assess_staleness_daily_grace():
     res = assess_staleness(daily, asset_class="bist_index", now_ts=now)
     assert res["checked"] is True
     assert res["stale"] is False
+
+
+def test_unadjusted_split_is_flagged():
+    c, h, l = _bars(80)
+    c[50:] = [x / 2 for x in c[50:]]
+    h[50:] = [x / 2 for x in h[50:]]
+    l[50:] = [x / 2 for x in l[50:]]
+    q = assess_ohlcv_quality(c, h, l, asset_class="bist_equity")
+    assert any("suspect_split" in i for i in q["issues"])
+    assert not any("suspect_split" in i for i in assess_ohlcv_quality(*_bars(80))["issues"])

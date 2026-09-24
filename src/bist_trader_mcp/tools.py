@@ -7,6 +7,7 @@ them instead of receiving an opaque exception.
 
 from __future__ import annotations
 
+import asyncio
 import math
 import os
 from datetime import date, timedelta
@@ -3858,21 +3859,37 @@ def apply_trade_to_chart(
 # --- Simple views: candle forecast + plain price action -------------------
 
 
-async def _load_ohlcv_for_symbol(
-    symbol: str, interval: str = "1d", limit: int = 400
+_BINANCE_INTERVALS = {
+    "1": "1m", "5": "5m", "15": "15m", "30": "30m", "60": "1h", "120": "2h",
+    "240": "4h", "1D": "1d", "D": "1d", "1W": "1w", "W": "1w",
+}
+
+
+async def _load_ohlcv_public(
+    symbol: str, timeframe: str = "1D", limit: int = 400
 ) -> dict[str, list[float]]:
-    """OHLCV for a symbol: Binance for crypto pairs, Yahoo EOD for BIST."""
+    """Fallback OHLCV when TradingView is not reachable.
+
+    Binance for crypto pairs (any timeframe), Yahoo split-adjusted daily for BIST.
+    """
     sym = symbol.strip().upper()
     is_crypto = sym.startswith("BINANCE:") or sym.endswith(("USDT", "USDC", "BUSD", "BTC"))
+    tf = timeframe.strip().upper()
     if is_crypto:
+        interval = _BINANCE_INTERVALS.get(tf, timeframe.lower())
         klines = await fetch_binance_klines(
             symbol=sym.split(":", 1)[-1], interval=interval, limit=limit
         )
         rows = [(k.open, k.high, k.low, k.close, k.volume) for k in klines]
     else:
+        if tf not in ("1D", "D"):
+            raise ValueError(
+                f"public fallback only has daily BIST bars (asked {timeframe}); "
+                "open TradingView Desktop for intraday"
+            )
         days = max(400, int(limit * 1.6))
         since = (date.today() - timedelta(days=days)).isoformat()
-        bars = await fetch_eod_ohlcv(sym.split(":", 1)[-1], since=since)
+        bars = await fetch_eod_ohlcv(sym.split(":", 1)[-1], since=since, adjusted=True)
         rows = [
             (b.open, b.high, b.low, b.close, b.volume or 0.0)
             for b in bars
@@ -3893,14 +3910,35 @@ async def _resolve_bars(
     lows: list[float] | None,
     opens: list[float] | None,
     symbol: str | None,
-    interval: str,
+    timeframe: str,
     limit: int,
+    data_source: str = "auto",
 ) -> dict[str, Any]:
+    """Bars from the caller, else TradingView chart, else public fallback.
+
+    ``data_source``: "auto" (TradingView first, public if TV is unreachable),
+    "tradingview" (TV only) or "public" (Yahoo/Binance only).
+    """
     if closes and highs and lows:
-        return {"closes": closes, "highs": highs, "lows": lows, "opens": opens, "volumes": None}
+        return {"closes": closes, "highs": highs, "lows": lows, "opens": opens,
+                "volumes": None, "data_source": "caller"}
     if not symbol:
         raise ValueError("pass closes/highs/lows or a symbol")
-    return await _load_ohlcv_for_symbol(symbol, interval=interval, limit=limit)
+    tv_error = None
+    if data_source in ("auto", "tradingview"):
+        from .tv_tools import tv_fetch_ohlcv
+
+        tv = await asyncio.to_thread(tv_fetch_ohlcv, symbol, timeframe, min(limit, 500))
+        if tv.get("success"):
+            return {**tv["bars"], "data_source": "tradingview", "symbol_tv": tv["symbol_tv"]}
+        tv_error = f"{tv.get('error')}: {tv.get('detail')}"
+        if data_source == "tradingview":
+            raise ValueError(f"TradingView unavailable ({tv_error})")
+    bars = await _load_ohlcv_public(symbol, timeframe=timeframe, limit=limit)
+    out: dict[str, Any] = {**bars, "data_source": "public"}
+    if tv_error:
+        out["tradingview_error"] = tv_error
+    return out
 
 
 def _forecast_output_dir() -> Path:
@@ -3919,7 +3957,8 @@ async def forecast_next_candles(
     opens: list[float] | None = None,
     *,
     symbol: str | None = None,
-    interval: str = "1d",
+    timeframe: str = "1D",
+    data_source: str = "auto",
     horizon: int = 24,
     n_paths: int = 30,
     context: int = 360,
@@ -3934,7 +3973,7 @@ async def forecast_next_candles(
 
     try:
         bars = await _resolve_bars(
-            closes, highs, lows, opens, symbol, interval, max(context + 1, 120)
+            closes, highs, lows, opens, symbol, timeframe, max(context + 1, 120), data_source
         )
         fc = forecast_candles(
             bars["closes"], bars["highs"], bars["lows"], bars.get("opens"),
@@ -3946,7 +3985,15 @@ async def forecast_next_candles(
     except (TypeError, ValueError) as e:
         return {"error": "bad_input", "detail": str(e)}
 
-    out: dict[str, Any] = {"source": "bist-trader-mcp — candle_forecast", "symbol": symbol, **fc}
+    out: dict[str, Any] = {
+        "source": "bist-trader-mcp — candle_forecast",
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "data_source": bars.get("data_source"),
+        **fc,
+    }
+    if bars.get("tradingview_error"):
+        out["tradingview_error"] = bars["tradingview_error"]
     if save_html:
         page = render_forecast_html(
             fc, bars["closes"], bars["highs"], bars["lows"], bars.get("opens"),
@@ -3971,14 +4018,17 @@ async def get_simple_price_action(
     opens: list[float] | None = None,
     *,
     symbol: str | None = None,
-    interval: str = "1d",
+    timeframe: str = "1D",
+    data_source: str = "auto",
     min_rr: float = 1.5,
 ) -> dict[str, Any]:
     """Plain-language PA: trend, nearest S/R, last event, AL/SAT/BEKLE, one plan."""
     from .pa_simple import simple_price_action
 
     try:
-        bars = await _resolve_bars(closes, highs, lows, opens, symbol, interval, 300)
+        bars = await _resolve_bars(
+            closes, highs, lows, opens, symbol, timeframe, 300, data_source
+        )
         res = simple_price_action(
             bars["closes"], bars["highs"], bars["lows"], bars.get("opens"),
             volumes=bars.get("volumes"), min_rr=float(min_rr),
@@ -3987,4 +4037,200 @@ async def get_simple_price_action(
         return {"error": "data_error", "detail": str(e)}
     except (TypeError, ValueError) as e:
         return {"error": "bad_input", "detail": str(e)}
-    return {"source": "bist-trader-mcp — pa_simple", "symbol": symbol, **res}
+    return {
+        "source": "bist-trader-mcp — pa_simple",
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "data_source": bars.get("data_source"),
+        **res,
+    }
+
+
+# --- Measurement: walk-forward PA backtest + forecast calibration ---------
+
+# Approximate BIST30 constituents (composition changes quarterly — pass your
+# own `symbols` list for an exact universe).
+BIST30_DEFAULT = [
+    "AKBNK", "ALARK", "ARCLK", "ASELS", "ASTOR", "BIMAS", "EKGYO", "ENKAI",
+    "EREGL", "FROTO", "GARAN", "GUBRF", "HEKTS", "ISCTR", "KCHOL", "KONTR",
+    "KOZAL", "KRDMD", "MGROS", "OYAKC", "PETKM", "PGSUS", "SAHOL", "SASA",
+    "SISE", "TCELL", "THYAO", "TOASO", "TUPRS", "YKBNK",
+]
+
+
+def _require_opens(bars: dict[str, Any]) -> list[float]:
+    opens = bars.get("opens")
+    if opens and len(opens) == len(bars["closes"]):
+        return opens
+    c = bars["closes"]
+    return [c[0]] + c[:-1]
+
+
+async def backtest_price_action(
+    closes: list[float] | None = None,
+    highs: list[float] | None = None,
+    lows: list[float] | None = None,
+    opens: list[float] | None = None,
+    *,
+    symbol: str | None = None,
+    timeframe: str = "1D",
+    data_source: str = "auto",
+    bars: int = 500,
+    max_hold: int = 20,
+    min_rr: float = 1.5,
+    cost_pct: float = 0.002,
+    include_trades: bool = False,
+) -> dict[str, Any]:
+    """Walk-forward test of get_simple_price_action verdicts + factor attribution."""
+    from .pa_backtest import backtest_simple_pa, pa_factor_attribution
+
+    try:
+        data = await _resolve_bars(
+            closes, highs, lows, opens, symbol, timeframe, int(bars), data_source
+        )
+        warmup = min(120, max(60, len(data["closes"]) // 4))
+        bt = backtest_simple_pa(
+            _require_opens(data), data["highs"], data["lows"], data["closes"],
+            warmup=warmup, max_hold=int(max_hold), min_rr=float(min_rr),
+            cost_pct=float(cost_pct),
+        )
+    except SourceError as e:
+        return {"error": "data_error", "detail": str(e)}
+    except (TypeError, ValueError) as e:
+        return {"error": "bad_input", "detail": str(e)}
+    attribution = pa_factor_attribution(bt["trades"])
+    if not include_trades:
+        bt["recent_trades"] = bt.pop("trades")[-10:]
+    s = bt["stats"]
+    return {
+        "source": "bist-trader-mcp — pa_backtest",
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "data_source": data.get("data_source"),
+        **bt,
+        "factor_attribution": attribution,
+        "summary_tr": (
+            f"{s['trades']} işlem, isabet %{s['win_rate_pct']}, beklenti "
+            f"{s['expectancy_r']}R/işlem, toplam {s['total_r']}R, en kötü düşüş "
+            f"{s['max_drawdown_r']}R. {s['verdict_tr']} "
+            f"{attribution['confluence_score_check']['summary_tr']}"
+        ),
+    }
+
+
+async def backtest_price_action_universe(
+    symbols: list[str] | None = None,
+    *,
+    timeframe: str = "1D",
+    data_source: str = "auto",
+    bars: int = 500,
+    max_hold: int = 20,
+    min_rr: float = 1.5,
+    cost_pct: float = 0.002,
+) -> dict[str, Any]:
+    """Run backtest_price_action over many symbols and pool the trades.
+
+    Symbols are processed one by one (TradingView has a single chart).
+    """
+    from .pa_backtest import (
+        backtest_simple_pa,
+        group_trades,
+        pa_factor_attribution,
+        summarize_trades,
+    )
+
+    symbols = [s.strip().upper() for s in (symbols or BIST30_DEFAULT) if s.strip()]
+    per_symbol = []
+    pooled: list[dict[str, Any]] = []
+    failed = []
+    sources: set[str] = set()
+    for sym in symbols:
+        try:
+            data = await _resolve_bars(
+                None, None, None, None, sym, timeframe, int(bars), data_source
+            )
+            warmup = min(120, max(60, len(data["closes"]) // 4))
+            bt = backtest_simple_pa(
+                _require_opens(data), data["highs"], data["lows"], data["closes"],
+                warmup=warmup, max_hold=int(max_hold), min_rr=float(min_rr),
+                cost_pct=float(cost_pct),
+            )
+        except (SourceError, TypeError, ValueError) as e:
+            failed.append({"symbol": sym, "detail": str(e)})
+            continue
+        sources.add(str(data.get("data_source")))
+        for tr in bt["trades"]:
+            pooled.append({**tr, "symbol": sym})
+        s = bt["stats"]
+        per_symbol.append(
+            {
+                "symbol": sym,
+                "trades": s["trades"],
+                "win_rate_pct": s["win_rate_pct"],
+                "expectancy_r": s["expectancy_r"],
+                "total_r": s["total_r"],
+            }
+        )
+    per_symbol.sort(key=lambda r: -(r["total_r"] or 0))
+
+    stats = summarize_trades(pooled)
+    attribution = pa_factor_attribution(pooled)
+    return {
+        "source": "bist-trader-mcp — pa_backtest (universe)",
+        "timeframe": timeframe,
+        "data_sources": sorted(sources),
+        "symbols_tested": len(per_symbol),
+        "symbols_failed": failed,
+        "pooled_stats": stats,
+        "by_direction": group_trades(pooled, "direction"),
+        "by_trend": group_trades(pooled, "trend"),
+        "by_setup_type": group_trades(pooled, "setup_type"),
+        "per_symbol": per_symbol,
+        "factor_attribution": attribution,
+        "summary_tr": (
+            f"{len(per_symbol)} sembol, toplam {stats['trades']} işlem: isabet "
+            f"%{stats['win_rate_pct']}, beklenti {stats['expectancy_r']}R/işlem. "
+            f"{stats['verdict_tr']} Tut: {', '.join(attribution['keep']) or '-'}. "
+            f"At: {', '.join(attribution['drop']) or '-'}. "
+            f"{attribution['confluence_score_check']['summary_tr']}"
+        ),
+    }
+
+
+async def evaluate_forecast_accuracy(
+    closes: list[float] | None = None,
+    highs: list[float] | None = None,
+    lows: list[float] | None = None,
+    opens: list[float] | None = None,
+    *,
+    symbol: str | None = None,
+    timeframe: str = "1D",
+    data_source: str = "auto",
+    bars: int = 500,
+    horizon: int = 24,
+    n_paths: int = 30,
+    step: int = 10,
+) -> dict[str, Any]:
+    """Walk-forward calibration of forecast_next_candles (band coverage, direction)."""
+    from .forecast_eval import evaluate_forecast_calibration
+
+    try:
+        data = await _resolve_bars(
+            closes, highs, lows, opens, symbol, timeframe, int(bars), data_source
+        )
+        warmup = min(120, max(40, len(data["closes"]) // 4))
+        res = evaluate_forecast_calibration(
+            _require_opens(data), data["highs"], data["lows"], data["closes"],
+            horizon=int(horizon), n_paths=int(n_paths), step=int(step), warmup=warmup,
+        )
+    except SourceError as e:
+        return {"error": "data_error", "detail": str(e)}
+    except (TypeError, ValueError) as e:
+        return {"error": "bad_input", "detail": str(e)}
+    return {
+        "source": "bist-trader-mcp — forecast_eval",
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "data_source": data.get("data_source"),
+        **res,
+    }
