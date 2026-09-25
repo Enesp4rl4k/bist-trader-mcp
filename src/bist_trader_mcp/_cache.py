@@ -59,7 +59,8 @@ class LRUDict(OrderedDict):
         super().__setitem__(key, value)
         self.move_to_end(key)
         while len(self) > self.maxsize:
-            self.popitem(last=False)
+            # not popitem(): on Python 3.10 it calls our __getitem__ mid-removal
+            super().__delitem__(next(iter(self)))
 
 
 def _cache_root() -> Path:

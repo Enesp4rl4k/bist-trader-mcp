@@ -145,6 +145,15 @@ Every tool's description and schema is sent to the model on each request. Pick a
 
 Add single tools to any profile with `BIST_TOOLS_EXTRA=get_viop_iv_surface,get_yield_curve`.
 
+### Reliability
+
+- **Long runs:** `start_job(kind="backtest_universe", args={...})` returns a `job_id` at once; poll `get_job`. Use it for 30+ symbols or the daily pipeline so the host's tool timeout never cuts them off.
+- **Timeouts:** every tool call is capped (`BIST_TOOL_TIMEOUT`, default 120 s; backtests/pipeline 5–15 min) and errors come back as `{error, detail, tool}`.
+- **Responsiveness:** synchronous tools run off the event loop (one worker, so TradingView commands stay in order); multi-step TradingView sequences hold a lock so two tools never mix symbols on the single chart.
+- **Journal safety:** journal/config writes are atomic and file-locked across processes (MCP server + `bist-trader-daily` at the same time); a damaged journal is backed up as `*.corrupt-<time>` instead of being overwritten.
+- **Input checks:** symbols, timeframes and prices are validated before they reach Yahoo/Binance URLs or the TradingView CLI.
+- **Observability:** `get_network_stats` → per-tool calls / errors / avg & max latency; logs go to stderr (`BIST_LOG_LEVEL`) and optionally a rotating file (`BIST_LOG_FILE`).
+
 The analysis tools take `symbol` + `timeframe` (TradingView labels: `60`, `240`, `1D`…) and pull bars **from the TradingView chart** (`data_source="auto"`); if TradingView Desktop is not reachable they fall back to Binance (crypto) or split-adjusted Yahoo daily bars (BIST). Raw `closes/highs/lows/opens` arrays also work. The forecast is model-free (block bootstrap of recent candle shapes, volatility-regime scaled) — a spread of plausible paths, not a signal.
 
 ------|-----|

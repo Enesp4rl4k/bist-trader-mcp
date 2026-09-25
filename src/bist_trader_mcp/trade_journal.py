@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
+from ._fileio import atomic_write_text, locked
+
 Status = Literal["planned", "open", "closed", "cancelled"]
 
 
@@ -29,13 +31,20 @@ def _load(path: Path) -> list[dict[str, Any]]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
+        # Never let the next save overwrite a damaged journal: keep a copy.
+        backup = path.with_name(
+            f"{path.name}.corrupt-{datetime.now(timezone.utc):%Y%m%dT%H%M%S}"
+        )
+        try:
+            os.replace(path, backup)
+        except OSError:
+            pass
         return []
     return data if isinstance(data, list) else []
 
 
 def _save(path: Path, rows: list[dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(rows, indent=2, ensure_ascii=False), encoding="utf-8")
+    atomic_write_text(path, json.dumps(rows, indent=2, ensure_ascii=False))
 
 
 def log_trade_plan(
@@ -47,6 +56,13 @@ def log_trade_plan(
 ) -> dict[str, Any]:
     """Persist a design_trade_setup / design_from_price_action output."""
     path = Path(journal_path) if journal_path else _default_journal_path()
+    with locked(path):
+        return _log_locked(path, plan, status, notes)
+
+
+def _log_locked(
+    path: Path, plan: dict[str, Any], status: Status, notes: str | None
+) -> dict[str, Any]:
     rows = _load(path)
     trade_id = str(uuid.uuid4())[:8]
     row = {
@@ -109,6 +125,18 @@ def update_trade_status(
     journal_path: str | Path | None = None,
 ) -> dict[str, Any]:
     path = Path(journal_path) if journal_path else _default_journal_path()
+    with locked(path):
+        return _update_locked(path, trade_id, status, exit_price, pnl, notes)
+
+
+def _update_locked(
+    path: Path,
+    trade_id: str,
+    status: Status,
+    exit_price: float | None,
+    pnl: float | None,
+    notes: str | None,
+) -> dict[str, Any]:
     rows = _load(path)
     found = None
     for r in rows:

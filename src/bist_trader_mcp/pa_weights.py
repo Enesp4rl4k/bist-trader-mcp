@@ -63,11 +63,10 @@ def load_weights() -> dict[str, Any] | None:
 
 
 def save_weights(data: dict[str, Any]) -> str:
+    from ._fileio import atomic_write_text
+
     path = weights_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
-    os.replace(tmp, path)
+    atomic_write_text(path, json.dumps(data, ensure_ascii=False, indent=1))
     return str(path)
 
 

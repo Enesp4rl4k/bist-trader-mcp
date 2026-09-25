@@ -92,10 +92,12 @@ def load_config() -> RiskConfig:
 
 
 def save_config(updates: dict[str, Any]) -> RiskConfig:
-    cfg = RiskConfig.from_dict({**asdict(load_config()), **(updates or {})})
+    from ._fileio import atomic_write_text, locked
+
     path = config_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(asdict(cfg), indent=1), encoding="utf-8")
+    with locked(path):  # read-modify-write: concurrent partial updates must not collide
+        cfg = RiskConfig.from_dict({**asdict(load_config()), **(updates or {})})
+        atomic_write_text(path, json.dumps(asdict(cfg), indent=1))
     return cfg
 
 

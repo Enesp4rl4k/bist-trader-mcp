@@ -9,7 +9,13 @@ adding new tools trivial (just define a function and decorate it).
 
 from __future__ import annotations
 
+import asyncio
+import contextvars
+import inspect
 import json
+import os
+import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from mcp.server import Server
@@ -18,6 +24,8 @@ from mcp.server.stdio import stdio_server
 from mcp.types import CallToolResult, TextContent
 
 from .http_utils import close_shared_client
+from .jobs import get_job, start_job
+from .telemetry import record, setup_logging
 from .tool_profiles import active_profile, enabled_tools, is_enabled
 from .tools import (
     DASHBOARD_URI,
@@ -155,6 +163,7 @@ def _register(
     handler: Any,
     meta: dict[str, Any] | None = None,
     structured: bool = False,
+    timeout: float | None = None,
 ) -> None:
     """Internal helper to register a tool for dispatch.
 
@@ -168,6 +177,7 @@ def _register(
         "handler": handler,
         "meta": meta,
         "structured": structured,
+        "timeout": timeout,
     }
 
 
@@ -3342,6 +3352,46 @@ _register(
 )
 
 
+# --- Background jobs --------------------------------------------------------
+
+_register(
+    "start_job",
+    description=(
+        "Run a long task in the background and return a job_id immediately — use for "
+        "universe backtests (30+ symbols) and the daily pipeline, which can outlast "
+        "the host's tool timeout. kind: backtest_universe | backtest | daily_pipeline | "
+        "forecast_accuracy; args: the same arguments as that tool. Poll with get_job."
+    ),
+    input_schema={
+        "type": "object",
+        "required": ["kind"],
+        "properties": {
+            "kind": {"type": "string", "enum": ["backtest_universe", "backtest",
+                                                 "daily_pipeline", "forecast_accuracy"]},
+            "args": {"type": "object"},
+        },
+    },
+    handler=lambda args: start_job(args["kind"], args.get("args")),
+)
+
+_register(
+    "get_job",
+    description="Status of a background job (result included once finished); no id = list.",
+    input_schema={"type": "object", "properties": {"job_id": {"type": "string"}}},
+    handler=lambda args: get_job(args.get("job_id")),
+)
+
+# Tools that legitimately run for minutes (default limit: BIST_TOOL_TIMEOUT, 120 s).
+for _name, _secs in {
+    "backtest_price_action_universe": 900, "run_daily_pipeline": 900,
+    "backtest_price_action": 300, "evaluate_forecast_accuracy": 300,
+    "run_market_assistant": 300, "run_scenario_assistant": 300,
+    "apply_scenario_to_chart": 300, "run_trade_assistant": 300,
+}.items():
+    if _name in TOOL_REGISTRY:
+        TOOL_REGISTRY[_name]["timeout"] = _secs
+
+
 # ---------------------------------------------------------------------------
 # MCP protocol handlers
 # ---------------------------------------------------------------------------
@@ -3367,32 +3417,70 @@ async def _call_tool(
     name: str, arguments: dict[str, Any]
 ) -> list[TextContent] | CallToolResult:
     arguments = arguments or {}
-    entry = None
-    try:
-        entry = TOOL_REGISTRY.get(name)
-        if entry is None:
-            result = {"error": "unknown_tool", "detail": name}
-        elif not is_enabled(name, list(TOOL_REGISTRY)):
-            result = {
-                "error": "tool_disabled",
-                "detail": f"{name} is not in tool profile '{active_profile()}' "
-                          "(set BIST_TOOL_PROFILE=full or add it via BIST_TOOLS_EXTRA)",
-            }
-            entry = None
-        else:
-            handler = entry["handler"]
-            result = handler(arguments)
-            # If handler returns a coroutine, await it
-            if hasattr(result, "__await__"):
-                result = await result
-    except KeyError as e:
-        result = {"error": "missing_argument", "detail": str(e)}
-    except Exception as e:  # surface unexpected errors as structured payload
-        result = {"error": "tool_failed", "detail": f"{type(e).__name__}: {e}"}
+    entry = TOOL_REGISTRY.get(name)
+    t0 = time.perf_counter()
+    if entry is None:
+        result: Any = {"error": "unknown_tool", "detail": name}
+    elif not is_enabled(name, list(TOOL_REGISTRY)):
+        result = {
+            "error": "tool_disabled",
+            "detail": f"{name} is not in tool profile '{active_profile()}' "
+                      "(set BIST_TOOL_PROFILE=full or add it via BIST_TOOLS_EXTRA)",
+        }
+        entry = None
+    else:
+        timeout = float(entry.get("timeout") or DEFAULT_TOOL_TIMEOUT)
+        try:
+            result = await asyncio.wait_for(_invoke(entry, arguments), timeout)
+        except asyncio.TimeoutError:
+            result = {"error": "timeout",
+                      "detail": f"{name} did not finish within {timeout:.0f}s"
+                                + (" — use start_job for long runs" if timeout < 600 else "")}
+        except KeyError as e:
+            result = {"error": "missing_argument", "detail": str(e)}
+        except Exception as e:  # surface unexpected errors as structured payload
+            result = {"error": "tool_failed", "detail": f"{type(e).__name__}: {e}"}
 
+    failed = isinstance(result, dict) and bool(result.get("error"))
+    if failed:
+        result.setdefault("tool", name)
+    record(name, (time.perf_counter() - t0) * 1000, not failed,
+           result.get("detail") if failed else None)
     if entry and entry.get("structured") and isinstance(result, dict):
         return structured_result(result)
     return [TextContent(type="text", text=encode_result(result))]
+
+
+DEFAULT_TOOL_TIMEOUT = float(os.environ.get("BIST_TOOL_TIMEOUT", "120"))
+# One worker: legacy synchronous tools drive TradingView (one chart, sleeps,
+# subprocesses) and were always serialised; they now run off the event loop
+# so the panel and async tools stay responsive.
+_SYNC_TOOLS = ThreadPoolExecutor(max_workers=1, thread_name_prefix="bist-sync-tool")
+
+
+def _is_async_handler(entry: dict[str, Any]) -> bool:
+    """Registry handlers are lambdas calling one tool function by its global name."""
+    cached = entry.get("_is_async")
+    if cached is None:
+        code = getattr(entry["handler"], "__code__", None)
+        names = code.co_names if code else ()
+        cached = any(inspect.iscoroutinefunction(globals().get(n)) for n in names)
+        entry["_is_async"] = cached
+    return cached
+
+
+async def _invoke(entry: dict[str, Any], arguments: dict[str, Any]) -> Any:
+    handler = entry["handler"]
+    if _is_async_handler(entry):
+        result = handler(arguments)
+    else:
+        ctx = contextvars.copy_context()
+        result = await asyncio.get_running_loop().run_in_executor(
+            _SYNC_TOOLS, ctx.run, handler, arguments
+        )
+    if hasattr(result, "__await__"):
+        result = await result
+    return result
 
 
 def structured_result(result: dict[str, Any]) -> CallToolResult:
@@ -3894,6 +3982,7 @@ async def _get_prompt(name: str, arguments: dict[str, Any] | None = None) -> Get
 
 
 async def run() -> None:
+    setup_logging()
     try:
         async with stdio_server() as (read_stream, write_stream):
             await server.run(

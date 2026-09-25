@@ -2,14 +2,33 @@
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 import subprocess
+import threading
 import time
 from pathlib import Path
 from typing import Any
 
 DEFAULT_TV_MCP = Path(r"C:\Users\parlak\Downloads\tradingview-mcp")
+
+# TradingView Desktop has ONE chart. A multi-step sequence (set symbol → set
+# timeframe → read bars / draw) must not interleave with another thread's
+# sequence, or a tool reads the other symbol's bars. Hold TV_LOCK around every
+# sequence; tv_call takes it too, so single commands are serialised as well.
+TV_LOCK = threading.RLock()
+
+
+def tv_sequence(fn):
+    """Run a multi-command TradingView sequence under TV_LOCK."""
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        with TV_LOCK:
+            return fn(*args, **kwargs)
+
+    return wrapper
 
 
 def tv_mcp_root() -> Path:
@@ -21,14 +40,15 @@ def tv_mcp_root() -> Path:
 
 def tv_call(*args: str, timeout: int = 90) -> dict[str, Any]:
     root = tv_mcp_root()
-    proc = subprocess.run(
-        ["node", "src/cli/index.js", *args],
-        cwd=str(root),
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        check=False,
-    )
+    with TV_LOCK:
+        proc = subprocess.run(
+            ["node", "src/cli/index.js", *args],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
     raw = (proc.stdout or proc.stderr or "").strip()
     if not raw:
         return {
@@ -263,6 +283,7 @@ def _profit_level(plan: dict[str, Any]) -> float:
     return max(prices)
 
 
+@tv_sequence
 def apply_trade_plan_to_chart(
     plan: dict[str, Any],
     *,
@@ -495,6 +516,7 @@ def _closest_levels(
     return rows[:limit]
 
 
+@tv_sequence
 def apply_pa_overlay_to_chart(
     mtf: dict[str, Any],
     *,
@@ -793,6 +815,7 @@ def _ew_points_for_chart(
     return points[-6:] if len(points) > 6 else points
 
 
+@tv_sequence
 def apply_scenario_to_chart(
     scenario: dict[str, Any],
     *,

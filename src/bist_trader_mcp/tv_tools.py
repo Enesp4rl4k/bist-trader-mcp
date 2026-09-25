@@ -6,7 +6,8 @@ import subprocess
 import time
 from typing import Any
 
-from .tv_bridge import tv_call, tv_mcp_root
+from .tv_bridge import tv_call, tv_mcp_root, tv_sequence
+from .validation import validate_symbol, validate_timeframe
 
 
 def _bars_from_ohlcv(res: dict[str, Any]) -> dict[str, list[float]]:
@@ -124,10 +125,19 @@ healthCheck()
 
 
 def tv_chart_set_symbol(symbol: str) -> dict[str, Any]:
+    # Validate at the subprocess boundary: only a small alphabet reaches the CLI.
+    try:
+        symbol = validate_symbol(symbol)
+    except ValueError as e:
+        return {"success": False, "error": "bad_input", "detail": str(e)}
     return {"source": "bist-trader-mcp — tv_tools", **tv_call("symbol", symbol)}
 
 
 def tv_chart_set_timeframe(timeframe: str) -> dict[str, Any]:
+    try:
+        timeframe = validate_timeframe(timeframe)
+    except ValueError as e:
+        return {"success": False, "error": "bad_input", "detail": str(e)}
     return {"source": "bist-trader-mcp — tv_tools", **tv_call("timeframe", timeframe)}
 
 
@@ -158,6 +168,7 @@ def tv_remove_studies_matching(name_substr: str) -> dict[str, Any]:
     }
 
 
+@tv_sequence
 def tv_finalize_chart_view(
     symbol: str,
     ltf_timeframe: str,
@@ -202,6 +213,7 @@ def tv_read_chart_bars(count: int = 200) -> dict[str, list[float]]:
     return _bars_from_ohlcv(raw)
 
 
+@tv_sequence
 def tv_fetch_ohlcv(
     symbol: str,
     timeframe: str = "1D",
@@ -247,6 +259,7 @@ def tv_fetch_ohlcv(
     }
 
 
+@tv_sequence
 def tv_fetch_mtf_ohlcv(
     symbol: str,
     ltf_timeframe: str,

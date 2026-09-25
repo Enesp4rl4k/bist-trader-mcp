@@ -77,3 +77,26 @@ def test_zigzag_pivots_prefix_stable_without_prominence():
     full_c = [(p.index, p.price, p.kind) for p in full if p.index <= cutoff]
     pre_c = [(p.index, p.price, p.kind) for p in pre if p.index <= cutoff]
     assert full_c == pre_c
+
+
+def test_backtest_has_no_lookahead_under_random_truncation():
+    """Trades that finished before bar k are identical whether or not the bars
+    after k exist — for many random series and cut points."""
+    from bist_trader_mcp.pa_backtest import backtest_simple_pa
+
+    from .test_candle_forecast import _series
+
+    rng = random.Random(7)
+    checked = 0
+    for seed in range(6):
+        o, h, l, c = _series(n=460, drift=rng.uniform(-0.002, 0.003), vol=0.014, seed=seed)
+        full = backtest_simple_pa(o, h, l, c, max_hold=10)["trades"]
+        for _ in range(3):
+            k = rng.randint(200, 440)
+            cut = backtest_simple_pa(o[:k], h[:k], l[:k], c[:k], max_hold=10)["trades"]
+            done_full = [t for t in full if t["exit_bar"] < k - 1]
+            done_cut = [t for t in cut if t["exit_bar"] < k - 1 and t["exit_reason"] != "open"]
+            assert done_cut == done_full[: len(done_cut)]
+            assert len(done_cut) == len(done_full)
+            checked += len(done_cut)
+    assert checked > 20  # the property was exercised on real trades

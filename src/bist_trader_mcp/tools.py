@@ -169,6 +169,12 @@ from .tv_tools import (
 from .tv_tools import (
     tv_health_check as _tv_health_check,
 )
+from .validation import (
+    validate_direction,
+    validate_price,
+    validate_symbol,
+    validate_timeframe,
+)
 from .viop import fetch_daily_settlement, fetch_option_chain, fetch_term_structure
 from .vol_forecast import ewma_volatility, garch_forecast
 from .yield_fitter import (
@@ -3950,7 +3956,11 @@ async def _resolve_bars(
                 "volumes": None, "data_source": "caller"}
     if not symbol:
         raise ValueError("pass closes/highs/lows or a symbol")
-    key = (symbol.strip().upper(), timeframe.strip().upper(), data_source)
+    symbol = validate_symbol(symbol)
+    timeframe = validate_timeframe(timeframe)
+    if data_source not in ("auto", "tradingview", "public"):
+        raise ValueError(f"data_source must be auto, tradingview or public, got {data_source!r}")
+    key = (symbol, timeframe, data_source)
     hit = _bars_cache_get(key, timeframe)
     if hit is not None and len(hit["closes"]) >= min(limit, _TV_MAX_BARS):
         return _slice_bars(hit, limit)
@@ -4410,13 +4420,15 @@ async def evaluate_forecast_accuracy(
 
 
 def get_network_stats(prune_cache: bool = False) -> dict[str, Any]:
-    """HTTP counters, disk cache size and in-memory bar cache entries."""
+    """HTTP counters, per-tool latency/errors, disk cache, in-memory bar cache."""
     from ._cache import cache_prune, cache_stats
     from .http_utils import network_stats
+    from .telemetry import tool_stats
 
     out: dict[str, Any] = {
         "source": "bist-trader-mcp — network stats",
         "http": network_stats(),
+        "tools": tool_stats(),
         "disk_cache": cache_stats(),
         "bar_cache": [
             {"symbol": k[0], "timeframe": k[1], "data_source": v[1].get("data_source"),
@@ -4521,12 +4533,15 @@ async def check_trade_risk(
     from .risk_engine import check_trade
 
     try:
+        symbol = validate_symbol(symbol)
+        plan = {
+            "direction": validate_direction(direction),
+            "entry": validate_price(entry, "entry"),
+            "stop": validate_price(stop, "stop"),
+            "target": None if target is None else validate_price(target, "target"),
+        }
         bars = await _risk_bars([symbol, *_open_symbols()], data_source)
-        res = check_trade(
-            {"direction": direction, "entry": float(entry), "stop": float(stop),
-             "target": None if target is None else float(target)},
-            symbol=symbol, bars_by_symbol=bars,
-        )
+        res = check_trade(plan, symbol=symbol, bars_by_symbol=bars)
     except (KeyError, TypeError, ValueError) as e:
         return {"error": "bad_input", "detail": str(e)}
     return {"source": "bist-trader-mcp — risk_engine.check_trade", **res}
@@ -4592,7 +4607,11 @@ async def dashboard_action(
     plan: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Buttons of the dashboard: tv_open, tv_draw_plan, risk_check, journal_add."""
-    sym = symbol.strip().upper()
+    try:
+        sym = validate_symbol(symbol)
+        timeframe = validate_timeframe(timeframe)
+    except ValueError as e:
+        return {"error": "bad_input", "detail": str(e)}
     if action == "tv_open":
         from .market_profiles import detect_asset_class, normalize_tv_symbol
 
