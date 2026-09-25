@@ -4476,6 +4476,18 @@ async def run_daily_pipeline(
     return {"source": "bist-trader-mcp — daily_pipeline", **res}
 
 
+# --- Paper account ----------------------------------------------------------
+
+
+async def get_paper_account(data_source: str = "public") -> dict[str, Any]:
+    """TL paper account of every pipeline / dashboard plan + live-vs-backtest check."""
+    from .daily_pipeline import tracked_symbols
+    from .paper import paper_account
+
+    bars = await _risk_bars(tracked_symbols(), data_source)
+    return {"source": "bist-trader-mcp — paper account", **paper_account(bars_by_symbol=bars)}
+
+
 # --- Alerts -----------------------------------------------------------------
 
 
@@ -4712,7 +4724,10 @@ async def dashboard_action(
             {"symbol": sym, "direction": direction, "entry": plan["entry"],
              "stop": plan["stop"], "targets": [target] if target else [],
              "best_risk_reward": plan.get("risk_reward"), "sizing": risk["sizing"],
-             "source": "dashboard", "timeframe": timeframe},
+             "source": "dashboard", "timeframe": timeframe,
+             # replayed by the daily tracker from the next bar on, as a limit
+             # order at `entry` with the usual 3-bar fill window
+             "signal_time": int(time.time()), "market": False},
             notes="dashboard",
         )
         return {**risk, "trade_id": logged["trade_id"],

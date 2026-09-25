@@ -98,6 +98,7 @@ from .tools import (
     get_mkk_market_stats,
     get_network_stats,
     get_news_headlines,
+    get_paper_account,
     get_portfolio_risk,
     get_repo_curve,
     get_risk_config,
@@ -3354,6 +3355,20 @@ _register(
     ),
 )
 
+
+# --- Paper account ----------------------------------------------------------
+
+_register(
+    "get_paper_account",
+    description=(
+        "PAPER: simulated TL account of every daily-pipeline and dashboard plan, replayed "
+        "on real bars (no orders): equity, return %, max drawdown, open positions marked "
+        "to market, stats in R, and live-vs-backtest check (live expectancy should be at "
+        "least half the out-of-sample backtest before risking real money)."
+    ),
+    input_schema={"type": "object", "properties": {}},
+    handler=lambda args: get_paper_account(),
+)
 
 # --- Alerts -----------------------------------------------------------------
 

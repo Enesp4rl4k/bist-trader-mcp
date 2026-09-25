@@ -85,19 +85,35 @@ def replay_plan(plan: dict[str, Any], bars: dict[str, Any], cost_pct: float) -> 
             "r": round(r, 4), "exit_time": times[exit_bar]}
 
 
+TRACKED_SOURCES = (PIPELINE_TAG, "dashboard")
+
+
+def is_tracked(row: dict[str, Any]) -> bool:
+    """Journal rows the paper account follows: pipeline / dashboard plans with a
+    signal timestamp (so they can be replayed bar by bar)."""
+    snap = row.get("plan_snapshot") or {}
+    return snap.get("source") in TRACKED_SOURCES and snap.get("signal_time") is not None
+
+
+def tracked_symbols(journal_path: str | Path | None = None) -> list[str]:
+    path = Path(journal_path) if journal_path else _default_journal_path()
+    return sorted({str(r.get("symbol")).upper() for r in _load(path)
+                   if is_tracked(r) and r.get("status") in ("planned", "open")})
+
+
 def track_journal(
     bars_by_symbol: dict[str, dict[str, Any]],
     *,
     journal_path: str | Path | None = None,
     cost_pct: float = 0.002,
 ) -> list[dict[str, Any]]:
-    """Advance planned/open pipeline trades using fresh bars; return the changes."""
+    """Advance planned/open simulated trades using fresh bars; return the changes."""
     path = Path(journal_path) if journal_path else _default_journal_path()
     changes = []
     for row in _load(path):
-        snap = row.get("plan_snapshot") or {}
-        if snap.get("source") != PIPELINE_TAG or row.get("status") not in ("planned", "open"):
+        if not is_tracked(row) or row.get("status") not in ("planned", "open"):
             continue
+        snap = row["plan_snapshot"]
         bars = bars_by_symbol.get(str(row.get("symbol")))
         if not bars:
             continue
@@ -223,11 +239,21 @@ async def run_pipeline(
             bars_by_symbol[sym] = await load_bars(sym)
         except Exception as e:  # noqa: BLE001 — one bad symbol must not stop the run
             failed.append({"symbol": sym, "detail": f"{type(e).__name__}: {e}"})
+    # open/planned trades outside today's universe still need bars to be tracked
+    for sym in tracked_symbols(journal_path):
+        if sym not in bars_by_symbol:
+            try:
+                bars_by_symbol[sym] = await load_bars(sym)
+            except Exception as e:  # noqa: BLE001
+                failed.append({"symbol": sym, "detail": f"tracking: {type(e).__name__}: {e}"})
 
     tracked = track_journal(bars_by_symbol, journal_path=journal_path, cost_pct=cost_pct)
 
     scans = []
-    for sym, bars in bars_by_symbol.items():
+    for sym in symbols:
+        bars = bars_by_symbol.get(sym)
+        if bars is None:
+            continue
         try:
             scans.append(await asyncio.to_thread(scan_symbol, sym, bars, day=day,
                                                  min_rr=min_rr))
@@ -286,6 +312,11 @@ async def run_pipeline(
         if scans else None
     )
     perf = pipeline_performance(journal_path)
+    from .paper import paper_account
+
+    paper = paper_account(journal_path=journal_path, bars_by_symbol=bars_by_symbol)
+    perf["paper"] = {k: paper[k] for k in ("equity", "return_pct", "max_drawdown_pct",
+                                          "closed_trades", "live_vs_backtest", "summary_tr")}
     result = {
         "date": day,
         "timeframe": timeframe,
@@ -363,6 +394,20 @@ def _summary_tr(n, trends, picks, tracked, perf) -> str:
 # --------------------------------------------------------------------------- html
 
 
+def _paper_card(paper: dict[str, Any] | None) -> str:
+    if not paper:
+        return ""
+    e = _html.escape
+    cls = "up" if paper["return_pct"] >= 0 else "dn"
+    return (
+        f'<div class="card"><h2>Kağıt hesap</h2>'
+        f'<div class="big {cls}">{paper["equity"]:,.0f} TL ({paper["return_pct"]:+.2f}%)</div>'
+        f'<div class="muted">düşüş %{paper["max_drawdown_pct"]:.2f} · '
+        f'{paper["closed_trades"]} işlem<br>{e(paper["live_vs_backtest"]["summary_tr"])}</div>'
+        f"</div>"
+    )
+
+
 def render_dashboard(result: dict[str, Any], scans: list[dict[str, Any]]) -> str:
     e = _html.escape
 
@@ -423,6 +468,7 @@ td {{ padding:6px 8px; border-top:1px solid var(--line); white-space:nowrap; }}
     <div class="muted">30 koşunun çoğunluğu yukarı biten semboller</div></div>
   <div class="card"><h2>Pipeline beklentisi</h2><div class="big">{st['expectancy_r'] if st['expectancy_r'] is not None else '-'}R</div>
     <div class="muted">{perf['closed']} kapanmış işlem · isabet %{st['win_rate_pct'] if st['win_rate_pct'] is not None else '-'}</div></div>
+  {_paper_card(perf.get('paper'))}
 </div>
 <div class="card"><h2>Bugünün seçimleri</h2><table>
 <tr class="muted"><td>Sembol</td><td>Karar</td><td>Giriş</td><td>Stop</td><td>Hedef</td><td>R:R</td><td>Tahmin ↑</td><td>Kurulum</td></tr>

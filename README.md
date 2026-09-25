@@ -145,6 +145,10 @@ Every tool's description and schema is sent to the model on each request. Pick a
 
 Add single tools to any profile with `BIST_TOOLS_EXTRA=get_viop_iv_surface,get_yield_curve`.
 
+### Paper account
+
+Every plan logged by `run_daily_pipeline` or the dashboard's "Günlüğe ekle" is replayed on real bars each evening (fill window, stop wins ties, gaps, max hold) — no orders are placed. `get_paper_account` turns that into a TL account: equity from `equity` in the risk config, return, max drawdown, open positions marked to the last close, stats in R, and a **live vs backtest** check against the out-of-sample expectancy saved by `backtest_price_action_universe(save_weights=true)`. Rule of thumb built in: after 20+ trades, live expectancy should be at least half the backtest before real money is considered.
+
 ### Alerts (Telegram)
 
 1. Create a bot with [@BotFather](https://t.me/BotFather), send it a message, get your chat id.
