@@ -28,9 +28,38 @@ from __future__ import annotations
 import json
 import os
 import re
+from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+
+class LRUDict(OrderedDict):
+    """Dict capped at ``maxsize`` entries; the least recently used is dropped.
+
+    For in-memory caches that live as long as the MCP server (bars, quotes):
+    without a cap they grow with every symbol ever looked at.
+    """
+
+    def __init__(self, maxsize: int) -> None:
+        super().__init__()
+        self.maxsize = maxsize
+
+    def __getitem__(self, key: Any) -> Any:
+        value = super().__getitem__(key)
+        self.move_to_end(key)
+        return value
+
+    def get(self, key: Any, default: Any = None) -> Any:
+        if key in self:
+            return self[key]
+        return default
+
+    def __setitem__(self, key: Any, value: Any) -> None:
+        super().__setitem__(key, value)
+        self.move_to_end(key)
+        while len(self) > self.maxsize:
+            self.popitem(last=False)
 
 
 def _cache_root() -> Path:

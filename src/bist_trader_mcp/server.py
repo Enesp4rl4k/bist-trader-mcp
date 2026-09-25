@@ -18,6 +18,7 @@ from mcp.server.stdio import stdio_server
 from mcp.types import CallToolResult, TextContent
 
 from .http_utils import close_shared_client
+from .tool_profiles import active_profile, enabled_tools, is_enabled
 from .tools import (
     DASHBOARD_URI,
     aggregate_portfolio_greeks,
@@ -1690,21 +1691,14 @@ _register(
 _OHLC_PROPS = {
     "symbol": {
         "type": "string",
-        "description": "BIST ticker (THYAO), index (XU030) or crypto pair "
-        "(BINANCE:BTCUSDT). Bars are pulled from the TradingView chart; used "
-        "when closes/highs/lows are not supplied.",
+        "description": "THYAO, XU030 or BINANCE:BTCUSDT; bars come from TradingView",
     },
-    "timeframe": {
-        "type": "string",
-        "default": "1D",
-        "description": "TradingView timeframe: 15, 60, 240, 1D, 1W…",
-    },
+    "timeframe": {"type": "string", "default": "1D", "description": "15, 60, 240, 1D, 1W"},
     "data_source": {
         "type": "string",
         "enum": ["auto", "tradingview", "public"],
         "default": "auto",
-        "description": "auto = TradingView chart first, Yahoo/Binance fallback if TV "
-        "Desktop is not reachable.",
+        "description": "auto: TradingView, else Yahoo/Binance",
     },
     "closes": {"type": "array", "items": {"type": "number"}},
     "highs": {"type": "array", "items": {"type": "number"}},
@@ -3360,11 +3354,11 @@ async def _list_tools() -> list[Tool]:
     return [
         Tool(
             name=name,
-            description=info["description"],
-            inputSchema=info["inputSchema"],
-            _meta=info.get("meta"),
+            description=TOOL_REGISTRY[name]["description"],
+            inputSchema=TOOL_REGISTRY[name]["inputSchema"],
+            _meta=TOOL_REGISTRY[name].get("meta"),
         )
-        for name, info in TOOL_REGISTRY.items()
+        for name in enabled_tools(list(TOOL_REGISTRY))
     ]
 
 
@@ -3378,6 +3372,13 @@ async def _call_tool(
         entry = TOOL_REGISTRY.get(name)
         if entry is None:
             result = {"error": "unknown_tool", "detail": name}
+        elif not is_enabled(name, list(TOOL_REGISTRY)):
+            result = {
+                "error": "tool_disabled",
+                "detail": f"{name} is not in tool profile '{active_profile()}' "
+                          "(set BIST_TOOL_PROFILE=full or add it via BIST_TOOLS_EXTRA)",
+            }
+            entry = None
         else:
             handler = entry["handler"]
             result = handler(arguments)

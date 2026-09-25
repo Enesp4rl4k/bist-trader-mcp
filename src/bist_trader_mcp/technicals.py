@@ -153,10 +153,26 @@ def bollinger_bands(
     lower: list[float | None] = [None] * n
     bandwidth: list[float | None] = [None] * n
     pct_b: list[float | None] = [None] * n
+    if n < period:
+        return BollingerResult(middle=middle, upper=upper, lower=lower,
+                               bandwidth=bandwidth, pct_b=pct_b)
+    # O(n) rolling sums. Values are shifted by a reference price so the
+    # sum-of-squares stays well conditioned (a flat series gives exactly 0 sd).
+    ref = values[0]
+    s1 = s2 = 0.0
+    for x in values[:period]:
+        d = x - ref
+        s1 += d
+        s2 += d * d
     for i in range(period - 1, n):
-        window = values[i - period + 1 : i + 1]
-        mean = sum(window) / period
-        var = sum((x - mean) ** 2 for x in window) / period
+        if i >= period:
+            d_in = values[i] - ref
+            d_out = values[i - period] - ref
+            s1 += d_in - d_out
+            s2 += d_in * d_in - d_out * d_out
+        mean_d = s1 / period
+        var = max(0.0, s2 / period - mean_d * mean_d)
+        mean = ref + mean_d
         sd = math.sqrt(var)
         u = mean + std_dev * sd
         low = mean - std_dev * sd

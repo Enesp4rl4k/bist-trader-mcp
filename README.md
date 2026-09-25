@@ -131,7 +131,19 @@ The daily pipeline and the dashboard's "Günlüğe ekle" run every plan through 
 
 Live analysis (`get_simple_price_action`) uses the saved weights automatically: dropped factors no longer score, and a setup type with a proven negative record (≥ 20 trades) is downgraded to **BEKLE**. Backtests always measure the unweighted engine unless asked otherwise.
 
-**Paths / env:** `BIST_PA_WEIGHTS` (weights JSON), `BIST_TRADE_JOURNAL` (journal JSON), `BIST_FORECAST_DIR` (HTML output), `BIST_PANEL_DB` (price panel), `BIST_HTTP_PER_HOST` (parallel requests per host, default 4), `BIST_RISK_CONFIG` (risk settings), `BIST_DASHBOARD_PORT` (local panel, default 8765).
+**Paths / env:** `BIST_PA_WEIGHTS` (weights JSON), `BIST_TRADE_JOURNAL` (journal JSON), `BIST_FORECAST_DIR` (HTML output), `BIST_PANEL_DB` (price panel), `BIST_HTTP_PER_HOST` (parallel requests per host, default 4), `BIST_RISK_CONFIG` (risk settings), `BIST_DASHBOARD_PORT` (local panel, default 8765), `BIST_WORKERS` (processes for universe backtests).
+
+### Tool profiles (context cost)
+
+Every tool's description and schema is sent to the model on each request. Pick a smaller set with `BIST_TOOL_PROFILE` in the MCP server's `env`:
+
+| Profile | Tools | ≈ tokens per request | Contents |
+|---|---|---|---|
+| `core` | 21 | 3.6k | Simple PA, forecast, risk, dashboard, daily pipeline, backtests, journal, news/KAP |
+| `trader` | 49 | 8.2k | core + detailed PA/Elliott/scenario, TradingView, market data, valuation |
+| `full` (default) | 113 | 17.2k | everything |
+
+Add single tools to any profile with `BIST_TOOLS_EXTRA=get_viop_iv_surface,get_yield_curve`.
 
 The analysis tools take `symbol` + `timeframe` (TradingView labels: `60`, `240`, `1D`…) and pull bars **from the TradingView chart** (`data_source="auto"`); if TradingView Desktop is not reachable they fall back to Binance (crypto) or split-adjusted Yahoo daily bars (BIST). Raw `closes/highs/lows/opens` arrays also work. The forecast is model-free (block bootstrap of recent candle shapes, volatility-regime scaled) — a spread of plausible paths, not a signal.
 

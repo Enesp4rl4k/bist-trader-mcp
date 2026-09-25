@@ -25,6 +25,8 @@ from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
+from ._cache import LRUDict
+
 TICKER = [
     ("XU100", "^XU100"), ("XU030", "^XU030"), ("USDTRY", "USDTRY=X"), ("EURTRY", "EURTRY=X"),
     ("ALTIN", "GC=F"), ("GÜMÜŞ", "SI=F"), ("BRENT", "BZ=F"), ("BAKIR", "HG=F"),
@@ -71,7 +73,7 @@ class DashboardState:
 
 # --------------------------------------------------------------------------- loaders
 
-_quote_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_quote_cache: dict[str, tuple[float, dict[str, Any]]] = LRUDict(256)
 
 
 async def _quotes(pairs: list[tuple[str, str]]) -> list[dict[str, Any]]:
@@ -162,7 +164,9 @@ async def section_watchlist(state: DashboardState, quotes, bars) -> list[dict[st
                                                  if k != "symbol"}}
         try:
             b = await bars(sym, "1D", "public")
-            pa = simple_price_action(b["closes"], b["highs"], b["lows"], b.get("opens"))
+            pa = await asyncio.to_thread(
+                simple_price_action, b["closes"], b["highs"], b["lows"], b.get("opens")
+            )
             row.update(trend=pa["trend"], verdict=pa["verdict"])
             if row.get("last") is None:
                 row["last"] = b["closes"][-1]
@@ -179,9 +183,16 @@ async def section_chart(state: DashboardState, bars) -> dict[str, Any]:
     from .pa_simple import simple_price_action
 
     b = await bars(state.symbol, state.timeframe, state.chart_source)
-    pa = simple_price_action(b["closes"], b["highs"], b["lows"], b.get("opens"), debug=True)
-    fc = forecast_candles(b["closes"], b["highs"], b["lows"], b.get("opens"),
-                          horizon=10, n_paths=30, seed=0)
+
+    def compute() -> tuple[dict[str, Any], dict[str, Any]]:
+        pa = simple_price_action(b["closes"], b["highs"], b["lows"], b.get("opens"),
+                                 debug=True)
+        fc = forecast_candles(b["closes"], b["highs"], b["lows"], b.get("opens"),
+                              horizon=10, n_paths=30, seed=0)
+        return pa, fc
+
+    # CPU work off the event loop: MCP calls and the web panel stay responsive.
+    pa, fc = await asyncio.to_thread(compute)
     k = 150
     opens = b.get("opens") or ([b["closes"][0]] + b["closes"][:-1])
     return {

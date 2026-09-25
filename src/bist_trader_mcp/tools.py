@@ -15,6 +15,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
+from ._cache import LRUDict
 from ._wip import wip_payload
 from .backtest import SIGNAL_GENERATORS, run_backtest
 from .bist_eod import fetch_eod_ohlcv
@@ -3976,7 +3977,8 @@ async def _resolve_bars(
 
 
 _TV_MAX_BARS = 500
-_BARS_CACHE: dict[tuple[str, str, str], tuple[float, dict[str, Any]]] = {}
+# ~500 bars × 6 series per entry; 64 entries covers a BIST100 scan per timeframe pair.
+_BARS_CACHE: dict[tuple[str, str, str], tuple[float, dict[str, Any]]] = LRUDict(64)
 
 
 def _bars_ttl(timeframe: str) -> float:
@@ -4156,7 +4158,9 @@ async def backtest_price_action(
             closes, highs, lows, opens, symbol, timeframe, int(bars), data_source
         )
         warmup = min(120, max(60, len(data["closes"]) // 4))
-        bt = backtest_simple_pa(
+        # CPU-bound: keep the event loop (other MCP calls, the panel) responsive.
+        bt = await asyncio.to_thread(
+            backtest_simple_pa,
             _require_opens(data), data["highs"], data["lows"], data["closes"],
             warmup=warmup, max_hold=int(max_hold), min_rr=float(min_rr),
             cost_pct=float(cost_pct),
@@ -4196,6 +4200,7 @@ async def backtest_price_action_universe(
     cost_pct: float = 0.002,
     save_weights: bool = False,
     train_frac: float = 2 / 3,
+    workers: int | None = None,
 ) -> dict[str, Any]:
     """Run backtest_price_action over many symbols and pool the trades.
 
@@ -4207,9 +4212,9 @@ async def backtest_price_action_universe(
     remaining out-of-sample part worse than the unweighted engine.
     """
     from .pa_backtest import (
-        backtest_simple_pa,
         group_trades,
         pa_factor_attribution,
+        run_backtests,
         summarize_trades,
     )
 
@@ -4220,24 +4225,33 @@ async def backtest_price_action_universe(
     sources: set[str] = set()
     datasets: dict[str, tuple[list[float], ...]] = {}
     splits: dict[str, int] = {}
+    jobs: dict[str, dict[str, Any]] = {}
+    # 1) fetch sequentially — TradingView has one chart
     for sym in symbols:
         try:
             data = await _resolve_bars(
                 None, None, None, None, sym, timeframe, int(bars), data_source
             )
-            warmup = min(120, max(60, len(data["closes"]) // 4))
-            n_bars = len(data["closes"])
-            splits[sym] = warmup + int((n_bars - warmup) * float(train_frac))
-            datasets[sym] = (_require_opens(data), data["highs"], data["lows"], data["closes"])
-            bt = backtest_simple_pa(
-                _require_opens(data), data["highs"], data["lows"], data["closes"],
-                warmup=warmup, max_hold=int(max_hold), min_rr=float(min_rr),
-                cost_pct=float(cost_pct),
-            )
         except (SourceError, TypeError, ValueError) as e:
             failed.append({"symbol": sym, "detail": str(e)})
             continue
+        warmup = min(120, max(60, len(data["closes"]) // 4))
+        n_bars = len(data["closes"])
+        splits[sym] = warmup + int((n_bars - warmup) * float(train_frac))
+        datasets[sym] = (_require_opens(data), data["highs"], data["lows"], data["closes"])
         sources.add(str(data.get("data_source")))
+        jobs[sym] = {
+            "opens": datasets[sym][0], "highs": data["highs"], "lows": data["lows"],
+            "closes": data["closes"], "warmup": warmup, "max_hold": int(max_hold),
+            "min_rr": float(min_rr), "cost_pct": float(cost_pct),
+        }
+    # 2) compute in parallel processes, off the event loop
+    results = await asyncio.to_thread(run_backtests, list(jobs.values()), workers)
+    for sym, bt in zip(jobs, results, strict=True):
+        if isinstance(bt, BaseException):
+            failed.append({"symbol": sym, "detail": f"{type(bt).__name__}: {bt}"})
+            datasets.pop(sym, None)
+            continue
         for tr in bt["trades"]:
             pooled.append({**tr, "symbol": sym, "oos": tr["signal_bar"] >= splits[sym]})
         s = bt["stats"]
@@ -4256,7 +4270,8 @@ async def backtest_price_action_universe(
     attribution = pa_factor_attribution(pooled)
     weights_report = None
     if save_weights and pooled:
-        weights_report = _learn_and_save_weights(
+        weights_report = await asyncio.to_thread(
+            _learn_and_save_weights,
             pooled, datasets, splits,
             meta={
                 "symbols": sorted(datasets), "timeframe": timeframe,
@@ -4264,6 +4279,7 @@ async def backtest_price_action_universe(
                 "cost_pct": cost_pct,
             },
             max_hold=int(max_hold), min_rr=float(min_rr), cost_pct=float(cost_pct),
+            workers=workers,
         )
     return {
         "source": "bist-trader-mcp — pa_backtest (universe)",
@@ -4297,9 +4313,10 @@ def _learn_and_save_weights(
     max_hold: int,
     min_rr: float,
     cost_pct: float,
+    workers: int | None = None,
 ) -> dict[str, Any]:
     """Fit on in-sample trades, validate out-of-sample, refit on all, save."""
-    from .pa_backtest import backtest_simple_pa, pa_factor_attribution, summarize_trades
+    from .pa_backtest import pa_factor_attribution, run_backtests, summarize_trades
     from .pa_weights import build_weights, save_weights, weights_path
 
     train = [t for t in pooled if not t["oos"]]
@@ -4307,15 +4324,15 @@ def _learn_and_save_weights(
     # Stricter than the report (20 vs 10 trades per side) — weights change
     # live verdicts, so a factor needs a real sample before it is silenced.
     candidate = build_weights(pa_factor_attribution(train, min_samples=20), train)
+    oos_jobs = [
+        {"opens": o, "highs": h, "lows": lo, "closes": c, "warmup": splits[sym],
+         "max_hold": max_hold, "min_rr": min_rr, "cost_pct": cost_pct, "weights": candidate}
+        for sym, (o, h, lo, c) in datasets.items() if splits[sym] < len(c) - 10
+    ]
     test_weighted: list[dict[str, Any]] = []
-    for sym, (o, h, lo, c) in datasets.items():
-        if splits[sym] >= len(c) - 10:
-            continue
-        bt = backtest_simple_pa(
-            o, h, lo, c, warmup=splits[sym], max_hold=max_hold, min_rr=min_rr,
-            cost_pct=cost_pct, weights=candidate,
-        )
-        test_weighted.extend(bt["trades"])
+    for bt in run_backtests(oos_jobs, workers):
+        if not isinstance(bt, BaseException):
+            test_weighted.extend(bt["trades"])
     base_s = summarize_trades(test_base, min_trades=10)
     w_s = summarize_trades(test_weighted, min_trades=10)
     base_e = base_s["expectancy_r"]
@@ -4374,7 +4391,8 @@ async def evaluate_forecast_accuracy(
             closes, highs, lows, opens, symbol, timeframe, int(bars), data_source
         )
         warmup = min(120, max(40, len(data["closes"]) // 4))
-        res = evaluate_forecast_calibration(
+        res = await asyncio.to_thread(
+            evaluate_forecast_calibration,
             _require_opens(data), data["highs"], data["lows"], data["closes"],
             horizon=int(horizon), n_paths=int(n_paths), step=int(step), warmup=warmup,
         )

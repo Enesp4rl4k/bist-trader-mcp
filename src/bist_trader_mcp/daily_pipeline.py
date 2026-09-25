@@ -18,6 +18,7 @@ The bar loader is injected so the logic is testable without TradingView.
 
 from __future__ import annotations
 
+import asyncio
 import html as _html
 import zlib
 from collections.abc import Awaitable, Callable
@@ -227,7 +228,8 @@ async def run_pipeline(
     scans = []
     for sym, bars in bars_by_symbol.items():
         try:
-            scans.append(scan_symbol(sym, bars, day=day, min_rr=min_rr))
+            scans.append(await asyncio.to_thread(scan_symbol, sym, bars, day=day,
+                                                 min_rr=min_rr))
         except (ValueError, KeyError, TypeError) as e:
             failed.append({"symbol": sym, "detail": f"scan: {e}"})
     ranked = rank_candidates(scans)
@@ -435,7 +437,6 @@ td {{ padding:6px 8px; border-top:1px solid var(--line); white-space:nowrap; }}
 def main(argv: list[str] | None = None) -> None:
     """CLI for Task Scheduler / cron: ``bist-trader-daily --top 5``."""
     import argparse
-    import asyncio
     import json
 
     from .tools import run_daily_pipeline

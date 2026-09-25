@@ -167,12 +167,16 @@ def backtest_simple_pa(
     min_trades: int = 30,
     weights: dict[str, Any] | None = None,
     use_saved_weights: bool = False,
+    lookback_bars: int = 300,
 ) -> dict[str, Any]:
     """Walk-forward test of ``simple_price_action`` AL/SAT plans.
 
     By default learned weights are *disabled* so the baseline engine is measured.
     Pass ``weights`` (a pa_weights document) to test a candidate set, or
     ``use_saved_weights=True`` to test whatever is saved and active on disk.
+
+    ``lookback_bars``: each decision sees only the last N bars — the same
+    window the live pipeline analyses — which also keeps the cost O(n).
     """
     if weights is not None:
         ctx = use_weights(weights)
@@ -184,7 +188,7 @@ def backtest_simple_pa(
         return _run_backtest(
             opens, highs, lows, closes, dates=dates, warmup=warmup, step=step,
             max_hold=max_hold, fill_window=fill_window, min_rr=min_rr,
-            cost_pct=cost_pct, min_trades=min_trades,
+            cost_pct=cost_pct, min_trades=min_trades, lookback_bars=lookback_bars,
         )
 
 
@@ -202,6 +206,7 @@ def _run_backtest(
     min_rr: float,
     cost_pct: float,
     min_trades: int,
+    lookback_bars: int = 300,
 ) -> dict[str, Any]:
     n = len(closes)
     if not (n == len(opens) == len(highs) == len(lows)):
@@ -214,8 +219,9 @@ def _run_backtest(
     counts = {"AL": 0, "SAT": 0, "BEKLE": 0, "unfilled": 0}
     t = warmup
     while t < n - 1:
+        lo = max(0, t + 1 - lookback_bars)
         sig = simple_price_action(
-            closes[: t + 1], highs[: t + 1], lows[: t + 1], opens[: t + 1],
+            closes[lo: t + 1], highs[lo: t + 1], lows[lo: t + 1], opens[lo: t + 1],
             min_rr=min_rr, debug=True,
         )
         counts[sig["verdict"]] += 1
@@ -274,6 +280,7 @@ def _run_backtest(
         "bars": n,
         "params": {
             "warmup": warmup, "step": step, "max_hold": max_hold,
+            "lookback_bars": lookback_bars,
             "fill_window": fill_window, "min_rr": min_rr, "cost_pct": cost_pct,
         },
         "signals": counts,
@@ -353,4 +360,65 @@ def pa_factor_attribution(
     }
 
 
-__all__ = ["backtest_simple_pa", "group_trades", "pa_factor_attribution", "summarize_trades"]
+__all__ = [
+    "backtest_job",
+    "backtest_simple_pa",
+    "default_workers",
+    "group_trades",
+    "pa_factor_attribution",
+    "run_backtests",
+    "summarize_trades",
+]
+
+
+def backtest_job(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Picklable entry point for process pools: ``backtest_simple_pa(**kwargs)``."""
+    return backtest_simple_pa(**kwargs)
+
+
+def default_workers() -> int:
+    import os
+
+    env = os.environ.get("BIST_WORKERS")
+    if env and env.isdigit():
+        return int(env)
+    return max(1, min(4, (os.cpu_count() or 2) - 1))
+
+
+def run_backtests(jobs: list[dict[str, Any]], workers: int | None = None) -> list[Any]:
+    """Run many backtests, in parallel processes when it pays off.
+
+    Returns results in input order; a job that raised returns its exception.
+    Falls back to in-process execution if a pool cannot be started (restricted
+    sandboxes, frozen apps) — the answer is the same, only slower.
+    """
+    workers = default_workers() if workers is None else workers
+
+    def inline() -> list[Any]:
+        out: list[Any] = []
+        for j in jobs:
+            try:
+                out.append(backtest_simple_pa(**j))
+            except Exception as e:  # noqa: BLE001 — reported per symbol by the caller
+                out.append(e)
+        return out
+
+    if workers <= 1 or len(jobs) <= 1:
+        return inline()
+    from concurrent.futures import ProcessPoolExecutor
+    from concurrent.futures.process import BrokenProcessPool
+
+    try:
+        with ProcessPoolExecutor(max_workers=min(workers, len(jobs))) as pool:
+            futs = [pool.submit(backtest_job, j) for j in jobs]
+            out = []
+            for f in futs:
+                try:
+                    out.append(f.result())
+                except BrokenProcessPool:
+                    raise
+                except Exception as e:  # noqa: BLE001
+                    out.append(e)
+            return out
+    except (OSError, BrokenProcessPool, RuntimeError):
+        return inline()
