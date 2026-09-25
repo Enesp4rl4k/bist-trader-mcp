@@ -57,6 +57,7 @@ from .tools import (
     calculate_realized_vol,
     calculate_rolling_correlation,
     calculate_technicals,
+    check_alerts,
     check_trade_risk,
     dashboard_action,
     dashboard_snapshot,
@@ -70,6 +71,7 @@ from .tools import (
     find_viop_spread_opportunities,
     fit_yield_curve_nss,
     forecast_next_candles,
+    get_alerts,
     get_bist_eod_ohlcv,
     get_bist_sector_rotation,
     get_bist_snapshot,
@@ -131,6 +133,7 @@ from .tools import (
     scan_mtf_watchlist,
     scan_price_action_watchlist,
     screen_equity_universe,
+    send_test_alert,
     set_risk_config,
     simulate_option_strategy,
     stress_test_portfolio,
@@ -3351,6 +3354,42 @@ _register(
     ),
 )
 
+
+# --- Alerts -----------------------------------------------------------------
+
+_register(
+    "check_alerts",
+    description=(
+        "ALERTS: intraday check — open trades near their stop (≤0.3R, delayed quotes) and "
+        "material KAP disclosures for held/planned symbols. New alerts go to a local "
+        "outbox and to Telegram when BIST_TELEGRAM_BOT_TOKEN/CHAT_ID are set; each alert "
+        "is sent once. Fill/stop/target alerts come from run_daily_pipeline."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "send": {"type": "boolean", "default": True},
+            "near_stop_r": {"type": "number", "default": 0.3},
+        },
+    },
+    handler=lambda args: check_alerts(
+        send=bool(args.get("send", True)), near_stop_r=float(args.get("near_stop_r", 0.3))
+    ),
+)
+
+_register(
+    "get_alerts",
+    description="ALERTS: most recent alerts from the local outbox (newest first).",
+    input_schema={"type": "object", "properties": {"limit": {"type": "integer", "default": 50}}},
+    handler=lambda args: get_alerts(int(args.get("limit", 50))),
+)
+
+_register(
+    "send_test_alert",
+    description="ALERTS: send one Telegram test message to verify the bot token / chat id.",
+    input_schema={"type": "object", "properties": {}},
+    handler=lambda args: send_test_alert(),
+)
 
 # --- Background jobs --------------------------------------------------------
 

@@ -213,6 +213,7 @@ async def run_pipeline(
     journal_path: str | Path | None = None,
     store_prices: bool = True,
     html_dir: Path | None = None,
+    notify: bool = True,
 ) -> dict[str, Any]:
     day = date.today().isoformat()
     bars_by_symbol: dict[str, dict[str, Any]] = {}
@@ -303,6 +304,12 @@ async def run_pipeline(
         "prices_stored": stored,
         "summary_tr": _summary_tr(len(scans), trend_counts, picks, tracked, perf),
     }
+    if notify:
+        from .alerts import deliver, from_new_picks, from_tracked_changes
+
+        logged_picks = result["picks"] if log_to_journal else []
+        res = await deliver(from_tracked_changes(tracked) + from_new_picks(logged_picks, day))
+        result["alerts"] = {k: res[k] for k in ("new", "sent", "telegram", "errors")}
     if html_dir is not None:
         html_dir.mkdir(parents=True, exist_ok=True)
         path = html_dir / f"daily_{day}.html"

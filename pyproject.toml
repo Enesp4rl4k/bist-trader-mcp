@@ -76,6 +76,7 @@ Repository = "https://github.com/Enesp4rl4k/bist-trader-mcp"
 bist-trader-mcp = "bist_trader_mcp.__main__:main"
 bist-trader-daily = "bist_trader_mcp.daily_pipeline:main"
 bist-trader-dashboard = "bist_trader_mcp.dashboard_web:main"
+bist-trader-alerts = "bist_trader_mcp.tools:alerts_cli"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/bist_trader_mcp"]

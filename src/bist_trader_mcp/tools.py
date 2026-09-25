@@ -4476,6 +4476,73 @@ async def run_daily_pipeline(
     return {"source": "bist-trader-mcp — daily_pipeline", **res}
 
 
+# --- Alerts -----------------------------------------------------------------
+
+
+async def check_alerts(send: bool = True, near_stop_r: float = 0.3) -> dict[str, Any]:
+    """Intraday check: open trades near their stop + material KAP news for held symbols.
+
+    Lifecycle alerts (filled / stop / target) come from run_daily_pipeline.
+    Run this every 15–30 min via ``bist-trader-alerts`` in Task Scheduler / cron.
+    """
+    from .alerts import deliver, kap_alerts, near_stop_alerts
+    from .bist_snapshot import _to_yahoo
+    from .dashboard_data import _quotes
+    from .risk_engine import _journal_rows
+
+    rows = [r for r in _journal_rows(None) if r.get("status") in ("open", "planned")]
+    symbols = sorted({str(r.get("symbol") or "").upper() for r in rows} - {""})
+    found: list[dict[str, Any]] = []
+    notes: list[str] = []
+    if symbols:
+        quotes = await _quotes([(s, _to_yahoo(s)) for s in symbols])
+        prices = {q["symbol"]: float(q["last"]) for q in quotes if q.get("last")}
+        found += near_stop_alerts([r for r in rows if r.get("status") == "open"], prices,
+                                  near_stop_r)
+        try:
+            from dataclasses import asdict
+
+            ds = await fetch_disclosures(since=date.today() - timedelta(days=1), limit=100)
+            found += kap_alerts([asdict(d) for d in ds], set(symbols))
+        except Exception as e:  # noqa: BLE001 — KAP needs the browser extra
+            notes.append(f"KAP okunamadı: {type(e).__name__}")
+    res = await deliver(found, send=send)
+    return {
+        "source": "bist-trader-mcp — alerts",
+        "watched_symbols": symbols,
+        **{k: res.get(k) for k in ("new", "sent", "telegram", "errors", "alerts")},
+        "notes": notes,
+        "summary_tr": (f"{len(symbols)} sembol izlendi, {res['new']} yeni uyarı"
+                       + (f", {res['sent']} Telegram'a gitti." if res["telegram"]
+                          else " (Telegram ayarlı değil; uyarılar yerel dosyada).")),
+    }
+
+
+async def send_test_alert() -> dict[str, Any]:
+    """Send one test message to check the Telegram setup."""
+    from .alerts import _send_telegram, outbox_path, telegram_configured
+
+    if not telegram_configured():
+        return {"ok": False, "summary_tr": "BIST_TELEGRAM_BOT_TOKEN ve BIST_TELEGRAM_CHAT_ID "
+                "ortam değişkenleri ayarlı değil.", "outbox": str(outbox_path())}
+    ok, err = await _send_telegram("BIST Trader — test mesajı ✅")
+    return {"ok": ok, "error": err, "summary_tr": "Test mesajı gönderildi." if ok
+            else f"Gönderilemedi: {err}"}
+
+
+def get_alerts(limit: int = 50) -> dict[str, Any]:
+    from .alerts import outbox_path, recent_alerts, telegram_configured
+
+    return {"source": "bist-trader-mcp — alerts", "outbox": str(outbox_path()),
+            "telegram": telegram_configured(), "alerts": recent_alerts(int(limit))}
+
+
+def alerts_cli() -> None:
+    """``bist-trader-alerts``: one intraday alert check (for Task Scheduler / cron)."""
+    res = asyncio.run(check_alerts())
+    print(res["summary_tr"])
+
+
 # --- Risk engine ------------------------------------------------------------
 
 

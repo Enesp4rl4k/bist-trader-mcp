@@ -145,6 +145,14 @@ Every tool's description and schema is sent to the model on each request. Pick a
 
 Add single tools to any profile with `BIST_TOOLS_EXTRA=get_viop_iv_surface,get_yield_curve`.
 
+### Alerts (Telegram)
+
+1. Create a bot with [@BotFather](https://t.me/BotFather), send it a message, get your chat id.
+2. Add to the MCP server `env`: `BIST_TELEGRAM_BOT_TOKEN`, `BIST_TELEGRAM_CHAT_ID`; check with `send_test_alert`.
+3. `run_daily_pipeline` sends fills, stops, targets, cancellations and new picks; `check_alerts` (or the `bist-trader-alerts` CLI every 15–30 min) warns when an open trade is within 0.3R of its stop and on material KAP news for your symbols.
+
+Every alert is sent once and also kept in a local outbox (`get_alerts`, `BIST_ALERTS_FILE`), so nothing is lost without Telegram. The bot token never appears in results, errors or logs.
+
 ### Reliability
 
 - **Long runs:** `start_job(kind="backtest_universe", args={...})` returns a `job_id` at once; poll `get_job`. Use it for 30+ symbols or the daily pipeline so the host's tool timeout never cuts them off.
