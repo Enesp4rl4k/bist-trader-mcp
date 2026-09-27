@@ -66,6 +66,7 @@ from .tools import (
     design_mtf_trade_plan,
     design_scenario_trade_plan,
     design_trade_setup,
+    estimate_equity_beta,
     evaluate_forecast_accuracy,
     evaluate_signal_accuracy,
     find_viop_spread_opportunities,
@@ -146,6 +147,7 @@ from .tools import (
     tv_health_check,
     update_trade_status,
     validate_trade_consistency,
+    value_company,
     value_equity_dcf,
 )
 
@@ -3354,6 +3356,81 @@ _register(
         data=args.get("data") or {},
         auto_fetch=bool(args.get("auto_fetch", False)),
     ),
+)
+
+
+# --- Company valuation --------------------------------------------------------
+
+_NUM = {"type": "number"}
+_NUM_OR_PATH = {"oneOf": [{"type": "number"}, {"type": "array", "items": {"type": "number"}}]}
+
+_register(
+    "value_company",
+    description=(
+        "VALUATION: full company valuation in one call. Industrials: driver-based FCFF "
+        "DCF (revenue growth → EBIT margin → NOPAT − reinvestment, mid-year, value-driver "
+        "terminal) + WACC×g sensitivity + bear/base/bull scenarios + Monte Carlo "
+        "(P(value > price)) + DDM. Banks (auto for AKBNK/GARAN/…, or model='bank'): "
+        "residual income + justified P/B. Optional peer multiples. Returns a football-"
+        "field blend, margin of safety, sanity checks (incl. nominal/real TL mismatch) "
+        "and the source of every input. With `symbol`, history/price/beta are auto-filled "
+        "(Yahoo, best effort; your values always win). Needs `risk_free` (TL: 10Y DİBS, "
+        "decimal) or `wacc`. Rates are decimals."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "symbol": {"type": "string"},
+            "model": {"type": "string", "enum": ["auto", "industrial", "bank"]},
+            "autofill": {"type": "boolean", "default": True},
+            "price": _NUM,
+            "risk_free": {**_NUM, "description": "TL 10Y DİBS yield for TL valuations"},
+            "wacc": {**_NUM, "description": "Skip the CAPM build (banks: cost of equity)"},
+            "equity_risk_premium": {**_NUM, "description": "Default 0.055 (assumption)"},
+            "country_risk_premium": {**_NUM, "description": "Only on a mature-market rf"},
+            "beta": {**_NUM, "description": "Default: estimated vs XU100 (Blume)"},
+            "pre_tax_cost_of_debt": _NUM,
+            "expected_inflation": {**_NUM, "description": "Sets nominal terminal growth "
+                                   "= 2% real + inflation and checks consistency"},
+            "revenue0": _NUM,
+            "revenue_growth": {**_NUM_OR_PATH, "description": "Number or per-year list"},
+            "growth_fade_to": {**_NUM, "description": "Default: terminal growth"},
+            "ebit_margin": _NUM_OR_PATH,
+            "margin_fade_to": _NUM,
+            "years": {"type": "integer", "default": 10},
+            "tax_rate": _NUM,
+            "da_pct_revenue": _NUM,
+            "capex_pct_revenue": _NUM,
+            "nwc_pct_revenue": _NUM,
+            "terminal_growth": _NUM,
+            "terminal_roic": {**_NUM, "description": "Default = WACC (growth adds no value)"},
+            "debt": _NUM, "cash": _NUM, "minority_interest": _NUM,
+            "non_operating_assets": _NUM, "shares_outstanding": _NUM,
+            "book_value": _NUM, "roe": _NUM_OR_PATH, "payout": _NUM,
+            "dividend_per_share": _NUM,
+            "peers": {"type": "array", "description": "Tickers, or {ticker, pe, pb, ps, "
+                      "ev_ebitda} objects", "items": {}},
+            "run_monte_carlo": {"type": "boolean", "default": True},
+        },
+    },
+    handler=lambda args: value_company(**args),
+    timeout=180,
+)
+
+_register(
+    "estimate_equity_beta",
+    description=(
+        "VALUATION: equity beta vs an index (default XU100) from ~2 years of daily prices; "
+        "OLS with Blume adjustment, R² and standard error."
+    ),
+    input_schema={
+        "type": "object",
+        "required": ["symbol"],
+        "properties": {"symbol": {"type": "string"}, "index": {"type": "string"},
+                       "blume": {"type": "boolean", "default": True}},
+    },
+    handler=lambda args: estimate_equity_beta(
+        args["symbol"], args.get("index") or "XU100", bool(args.get("blume", True))),
 )
 
 

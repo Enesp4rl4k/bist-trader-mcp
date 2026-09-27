@@ -4476,6 +4476,45 @@ async def run_daily_pipeline(
     return {"source": "bist-trader-mcp — daily_pipeline", **res}
 
 
+# --- Company valuation --------------------------------------------------------
+
+
+async def value_company(symbol: str | None = None, **kwargs: Any) -> dict[str, Any]:
+    """Full company valuation (see company_valuation.value_company)."""
+    from .company_valuation import value_company as _value
+
+    try:
+        sym = validate_symbol(symbol) if symbol else None
+        for p in kwargs.get("peers") or []:
+            if isinstance(p, str):
+                validate_symbol(p)
+        res = await _value(sym, **{k: v for k, v in kwargs.items() if v is not None})
+    except SourceError as e:
+        return {"error": "data_error", "detail": str(e)}
+    except (TypeError, ValueError) as e:
+        return {"error": "bad_input", "detail": str(e)}
+    return {"source": "bist-trader-mcp — company valuation", **res}
+
+
+async def estimate_equity_beta(symbol: str, index: str = "XU100",
+                               blume: bool = True) -> dict[str, Any]:
+    """Beta of a stock vs an index from ~2 years of daily prices (public data)."""
+    from .valuation_pro import estimate_beta
+
+    try:
+        sym, idx = validate_symbol(symbol), validate_symbol(index)
+        s = await _resolve_bars(None, None, None, None, sym, "1D", 500, "public")
+        m = await _resolve_bars(None, None, None, None, idx, "1D", 500, "public")
+        res = estimate_beta(s["closes"], m["closes"], blume=blume)
+    except SourceError as e:
+        return {"error": "data_error", "detail": str(e)}
+    except (TypeError, ValueError) as e:
+        return {"error": "bad_input", "detail": str(e)}
+    return {"source": "bist-trader-mcp — beta", "symbol": sym, "index": idx, **res,
+            "summary_tr": f"{sym} beta {res['beta']} (ham {res['raw_beta']}, R² "
+                          f"{res['r_squared']}, {res['observations']} gözlem, {idx}'e göre)."}
+
+
 # --- Company events ---------------------------------------------------------
 
 

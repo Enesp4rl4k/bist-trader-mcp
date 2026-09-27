@@ -42,6 +42,7 @@ TRADER = CORE | frozenset({
     "get_economic_calendar", "get_bist_sector_rotation", "get_foreign_ownership",
     "calculate_technicals", "analyze_financial_statements", "value_equity_dcf",
     "rank_equity_universe", "calculate_kelly_sizing",
+    "value_company", "estimate_equity_beta",
 })
 
 PROFILES: dict[str, frozenset[str] | None] = {"core": CORE, "trader": TRADER, "full": None}

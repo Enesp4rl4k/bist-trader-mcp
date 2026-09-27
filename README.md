@@ -145,6 +145,25 @@ Every tool's description and schema is sent to the model on each request. Pick a
 
 Add single tools to any profile with `BIST_TOOLS_EXTRA=get_viop_iv_surface,get_yield_curve`.
 
+### Company valuation
+
+`value_company` values a company in one call and shows where every input came from (`user` / `yahoo` / `derived` / `default`); your values always win over auto-fill.
+
+- **Industrials:** driver-based FCFF DCF — revenue growth (fading to terminal) → EBIT margin → NOPAT − (capex − D&A + ΔNWC); mid-year discounting; terminal value with the value-driver formula (RONIC defaults to WACC, the conservative "growth adds no value" case); full bridge to equity (debt, cash, minorities, non-operating assets). Plus a WACC × g sensitivity grid, bear/base/bull scenarios, a Monte Carlo value distribution with P(value > price), and a DDM when dividends are paid.
+- **Banks** (auto for AKBNK, GARAN, ISCTR, YKBNK, HALKB, VAKBN… or `model="bank"`): residual income + justified P/B — FCFF is meaningless for a lender.
+- **Relative:** peer median P/E, P/B, P/S, EV/EBITDA, EV/Sales (tickers or your own numbers).
+- **Cost of capital:** CAPM on your `risk_free` (TL: 10Y DİBS) with a beta estimated vs XU100 (Blume-adjusted, `estimate_equity_beta`), ERP (default 5.5%, an assumption), optional country and size premia, market-value weights.
+- **High inflation:** pass `expected_inflation` → terminal growth = 2% real + inflation, and sanity checks flag nominal/real mixes, a terminal value above 85% of EV, a thin WACC − g spread or negative terminal FCFF.
+
+Auto-fill with `symbol` reads Yahoo's annual statements, price and prices for beta — best effort; check the figures against KAP (TMS 29 restatements can make old years non-comparable). The risk-free rate is not fetched automatically: pass `risk_free` or `wacc`.
+
+```
+value_company(symbol="THYAO", risk_free=0.30, expected_inflation=0.25)
+value_company(symbol="GARAN", risk_free=0.30)                     # bank model
+value_company(revenue0=100e9, revenue_growth=0.4, ebit_margin=0.12, wacc=0.33,
+              expected_inflation=0.25, shares_outstanding=1e9, price=100)
+```
+
 ### Company events
 
 `get_company_events` gives each company's **earnings window** from the SPK filing deadlines (Q1/9M: 30 days standalone / 40 consolidated after period end; H1: 50/60; annual: 60/70) — refined by KAP when available (already reported → window closed) — plus recent corporate actions from KAP (financial report, general assembly, dividend, capital increase / bonus issue, buyback). `check_trade_risk` warns when a report can land overnight: for the whole window if KAP shows no report yet, otherwise in the last 14 days before the deadline (most companies publish late). The dashboard calendar lists the deadlines. Banks (BDDK) often report earlier; treat the window as a risk flag, not a date prediction.
