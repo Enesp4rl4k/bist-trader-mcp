@@ -4476,6 +4476,57 @@ async def run_daily_pipeline(
     return {"source": "bist-trader-mcp — daily_pipeline", **res}
 
 
+# --- Company events ---------------------------------------------------------
+
+
+async def _company_info(symbols: list[str], days: int = 100) -> dict[str, Any]:
+    """Earnings window + KAP corporate actions; KAP is optional (browser extra)."""
+    from dataclasses import asdict
+
+    from .company_events import company_events
+
+    disclosures = None
+    try:
+        ds = await asyncio.wait_for(
+            fetch_disclosures(since=date.today() - timedelta(days=days), limit=500), 20
+        )
+        disclosures = [asdict(d) for d in ds]
+    except Exception:  # noqa: BLE001 — fall back to the filing calendar only
+        disclosures = None
+    out = company_events(symbols, disclosures)
+    for v in out.values():
+        v["kap_available"] = disclosures is not None
+    return out
+
+
+async def get_company_events(symbols: list[str] | None = None) -> dict[str, Any]:
+    """Per symbol: earnings window (SPK deadlines, KAP-aware) + recent corporate actions."""
+    from .company_events import filing_periods
+    from .daily_pipeline import tracked_symbols
+
+    try:
+        syms = [validate_symbol(s) for s in (symbols or tracked_symbols() or BIST30_DEFAULT[:10])]
+    except ValueError as e:
+        return {"error": "bad_input", "detail": str(e)}
+    info = await _company_info(syms)
+    flagged = {s: v["flags"] for s, v in info.items() if v["flags"]}
+    periods = [{k: (v.isoformat() if hasattr(v, "isoformat") else v) for k, v in p.items()}
+               for p in filing_periods(date.today())]
+    kap = next(iter(info.values()), {}).get("kap_available")
+    return {
+        "source": "bist-trader-mcp — company events",
+        "filing_periods": periods,
+        "kap_available": kap,
+        "companies": info,
+        "summary_tr": (
+            f"{len(syms)} şirket; {len(flagged)} tanesinde uyarı var"
+            + (": " + "; ".join(f"{s}: {', '.join(f)}" for s, f in list(flagged.items())[:5])
+               if flagged else ".")
+            + ("" if kap else " (KAP okunamadı — sadece yasal son tarihler kullanıldı.)")
+        ),
+    }
+
+
 # --- Paper account ----------------------------------------------------------
 
 
@@ -4620,7 +4671,8 @@ async def check_trade_risk(
             "target": None if target is None else validate_price(target, "target"),
         }
         bars = await _risk_bars([symbol, *_open_symbols()], data_source)
-        res = check_trade(plan, symbol=symbol, bars_by_symbol=bars)
+        company = (await _company_info([symbol])).get(symbol)
+        res = check_trade(plan, symbol=symbol, bars_by_symbol=bars, company=company)
     except (KeyError, TypeError, ValueError) as e:
         return {"error": "bad_input", "detail": str(e)}
     return {"source": "bist-trader-mcp — risk_engine.check_trade", **res}

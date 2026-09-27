@@ -76,6 +76,7 @@ from .tools import (
     get_bist_sector_rotation,
     get_bist_snapshot,
     get_btc_network_stats,
+    get_company_events,
     get_crypto_fear_greed,
     get_crypto_funding_rates,
     get_crypto_klines,
@@ -3355,6 +3356,22 @@ _register(
     ),
 )
 
+
+# --- Company events ---------------------------------------------------------
+
+_register(
+    "get_company_events",
+    description=(
+        "EVENTS: per company — earnings window from SPK filing deadlines (Q1/9M 30/40 "
+        "days, H1 50/60, annual 60/70; standalone/consolidated), refined by KAP when "
+        "available (already reported?), plus recent corporate actions from KAP "
+        "(financial report, general assembly, dividend, capital increase/bonus, buyback). "
+        "Default symbols: open/planned trades. check_trade_risk uses the same data."
+    ),
+    input_schema={"type": "object",
+                  "properties": {"symbols": {"type": "array", "items": {"type": "string"}}}},
+    handler=lambda args: get_company_events(args.get("symbols")),
+)
 
 # --- Paper account ----------------------------------------------------------
 

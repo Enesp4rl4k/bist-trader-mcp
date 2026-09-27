@@ -145,6 +145,10 @@ Every tool's description and schema is sent to the model on each request. Pick a
 
 Add single tools to any profile with `BIST_TOOLS_EXTRA=get_viop_iv_surface,get_yield_curve`.
 
+### Company events
+
+`get_company_events` gives each company's **earnings window** from the SPK filing deadlines (Q1/9M: 30 days standalone / 40 consolidated after period end; H1: 50/60; annual: 60/70) — refined by KAP when available (already reported → window closed) — plus recent corporate actions from KAP (financial report, general assembly, dividend, capital increase / bonus issue, buyback). `check_trade_risk` warns when a report can land overnight: for the whole window if KAP shows no report yet, otherwise in the last 14 days before the deadline (most companies publish late). The dashboard calendar lists the deadlines. Banks (BDDK) often report earlier; treat the window as a risk flag, not a date prediction.
+
 ### Paper account
 
 Every plan logged by `run_daily_pipeline` or the dashboard's "Günlüğe ekle" is replayed on real bars each evening (fill window, stop wins ties, gaps, max hold) — no orders are placed. `get_paper_account` turns that into a TL account: equity from `equity` in the risk config, return, max drawdown, open positions marked to the last close, stats in R, and a **live vs backtest** check against the out-of-sample expectancy saved by `backtest_price_action_universe(save_weights=true)`. Rule of thumb built in: after 20+ trades, live expectancy should be at least half the backtest before real money is considered.

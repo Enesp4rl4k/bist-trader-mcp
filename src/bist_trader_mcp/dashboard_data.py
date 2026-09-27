@@ -231,9 +231,22 @@ async def section_news(state: DashboardState, news) -> list[dict[str, Any]]:
 
 def section_calendar() -> list[dict[str, Any]]:
     from .calendar_data import build_calendar
+    from .company_events import filing_periods
 
     today = date.today()
-    return [asdict(e) for e in build_calendar(today, today + timedelta(days=21))]
+    horizon = today + timedelta(days=21)
+    items = [asdict(e) for e in build_calendar(today, horizon)]
+    # SPK filing deadlines: every listed company's earnings must land by these dates
+    for p in filing_periods(today):
+        for key, label, imp in (("deadline_standalone", "konsolide olmayan", "medium"),
+                                ("deadline_consolidated", "konsolide", "high")):
+            d = p[key]
+            if today <= d <= horizon:
+                items.append({"date": d.isoformat(), "event": f"{p['period']} bilanço son "
+                              f"günü ({label})", "category": "earnings", "importance": imp,
+                              "notes": None})
+    items.sort(key=lambda e: e["date"])
+    return items
 
 
 # --------------------------------------------------------------------------- snapshot

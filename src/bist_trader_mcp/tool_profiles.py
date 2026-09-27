@@ -26,6 +26,7 @@ CORE = frozenset({
     "check_trade_risk", "get_portfolio_risk", "get_risk_config", "set_risk_config",
     "backtest_price_action", "backtest_price_action_universe", "evaluate_forecast_accuracy",
     "start_job", "check_alerts", "get_alerts", "send_test_alert", "get_paper_account",
+    "get_company_events",
     "list_trade_journal", "update_trade_status", "apply_trade_to_chart",
     "get_market_summary", "get_news_headlines", "get_kap_disclosures",
     "get_network_stats", "get_health_status",

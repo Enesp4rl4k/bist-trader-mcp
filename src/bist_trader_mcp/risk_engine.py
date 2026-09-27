@@ -15,6 +15,8 @@ Checks (``block`` stops the trade, ``warn`` is shown but allowed):
 - liquidity           position value vs 20-day average traded value        warn / block at 3x
 - limit day           last bar moved ≥ 9.5% (BIST ±10% tavan/taban)        warn
 - macro event         high-importance TCMB/CPI event within N days         warn
+- earnings window     filing deadline near / KAP says not yet reported      warn
+- corporate action    recent dividend / capital change on KAP              warn
 
 Positions come from the trade journal: ``open`` trades, plus ``planned`` ones
 when checking a new trade (a queued plan reserves its risk). Rows without
@@ -205,8 +207,13 @@ def check_trade(
     journal_path: str | Path | None = None,
     now: datetime | None = None,
     events: list[dict[str, Any]] | None = None,
+    company: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Size a plan and run every portfolio check against it."""
+    """Size a plan and run every portfolio check against it.
+
+    ``company``: this symbol's entry from ``company_events.company_events`` (KAP
+    aware); without it the earnings window comes from the filing calendar only.
+    """
     cfg = cfg or load_config()
     now = now or datetime.now(timezone.utc)
     bars_by_symbol = bars_by_symbol or {}
@@ -315,6 +322,29 @@ def check_trade(
         if hot else "yakın önemli makro olay yok",
         "warn",
     ))
+
+    # earnings window (SPK filing deadlines, optionally refined by KAP)
+    from .company_events import earnings_window
+
+    info = (company or {}).get("earnings") if company else None
+    if info is None:
+        info = earnings_window(now.date())
+    # KAP says "not yet reported" → warn for the whole window; without KAP data
+    # only in the last 2 weeks, when most companies actually publish.
+    risky = info.get("in_window") and (
+        info.get("reported") is False
+        or (info.get("reported") is None and (info.get("days_left") or 99) <= 14)
+    )
+    checks.append(_check(
+        "earnings_window", not risky,
+        (f"bilanço dönemi {info['period']}: son gün {info['deadline_consolidated']} "
+         f"({info['days_left']} gün) — rapor gecesi boşluk riski")
+        if risky else "yakın bilanço riski yok",
+        "warn",
+    ))
+    for flag in (company or {}).get("flags") or []:
+        if not flag.startswith("bilanço"):
+            checks.append(_check("corporate_action", False, flag, "warn"))
 
     blocks = [c for c in checks if not c["ok"] and c["severity"] == "block"]
     warns = [c for c in checks if not c["ok"] and c["severity"] == "warn"]
