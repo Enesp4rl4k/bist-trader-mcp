@@ -92,6 +92,19 @@ get_kap_disclosures(company="THYAO")            # fundamental layer (after check
 | `design_scenario_trade_plan` | Plan + playbook (requires OHLCV) |
 | `get_market_profile` | HTF/LTF and thresholds |
 
+### Guided workflows (MCP prompts)
+
+Pick these from your AI app's prompt list (`/` menu in Claude / Cursor); the model then calls the right tools in order and reports in Turkish, citing data sources and never inventing numbers:
+
+| Prompt | What it does |
+|---|---|
+| `hisse-analizi` | One stock end to end: simple PA, 30 futures, company events, valuation, KAP, risk check |
+| `sabah-brifingi` | Morning: market strip, open risk, paper account, alerts, today's events, news |
+| `aksam-rutini` | After the close: daily pipeline as a background job, picks with lot sizes, paper account |
+| `sirket-degerleme` | Valuation with assumption review, sensitivity, scenarios, Monte Carlo, peers |
+| `strateji-dogrulama` | Real-data validation against the acceptance criteria (backtest, forecast, paper) |
+| `haftalik-degerlendirme` | Weekly review: what worked, what didn't, rule breaches, lessons |
+
 ### Live dashboard (inside the AI app)
 
 `open_dashboard` opens an interactive panel **inside the chat** on MCP Apps hosts (Claude Desktop / claude.ai, Cursor, VS Code): macro · TL · commodity strip, watchlist with PA verdicts, TradingView chart with plan lines and the forecast band, KAP + news feed, risk and macro calendar. It refreshes itself (15/30/60 s), and its buttons (TV'de aç, Planı çiz, Risk kontrolü, Günlüğe ekle, Claude'a sor) run MCP tools. For hosts without inline UI (Codex, terminals) the same panel runs in a browser: the tool returns a `http://127.0.0.1:…/?t=…` link, or run `bist-trader-dashboard`. Design: [`docs/DASHBOARD_ARCHITECTURE.md`](docs/DASHBOARD_ARCHITECTURE.md).

@@ -4099,6 +4099,17 @@ PROMPTS_REGISTRY: dict[str, dict[str, Any]] = {
     },
 }
 
+# Guided workflows for the daily loop (analysis → risk → journal → review).
+from .workflows import WORKFLOWS  # noqa: E402
+
+for _wname, _wf in WORKFLOWS.items():
+    PROMPTS_REGISTRY[_wname] = {
+        "description": _wf["description"],
+        "arguments": [PromptArgument(name=n, description=d, required=r)
+                      for n, d, r in _wf["arguments"]],
+        "render": _wf["render"],
+    }
+
 
 @server.list_prompts()
 async def _list_prompts() -> list[Prompt]:
