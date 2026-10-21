@@ -2,13 +2,13 @@
 
 [![Verified on MseeP](https://mseep.ai/badge.svg)](https://mseep.ai/app/219ae973-af4d-490e-a059-e8ac4f20c7bf)
 
-[![pytest](https://img.shields.io/badge/pytest-304%20passed-success)](https://github.com/Enesp4rl4k/bist-trader-mcp)
+[![pytest](https://github.com/Enesp4rl4k/bist-trader-mcp/actions/workflows/pytest.yml/badge.svg)](https://github.com/Enesp4rl4k/bist-trader-mcp/actions/workflows/pytest.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 
 **Open-source MCP server** for Turkish markets **and** crypto: macro & market data, **fundamental research routing** (KAP, BIST, VIOP, EVDS, crypto), **rule-based technical analysis** (Price Action, range/FVG, Elliott MTF), and **TradingView Desktop** drawing via CDP (Long/Short position tool).
 
-> **Open beta (v0.4.0):** `run_market_assistant` + **fusion** layer merges live fundamentals with PA/EW gates before drawing a position.
+> **Open beta (v0.5.0):** `run_market_assistant` + **fusion** layer merges live fundamentals with PA/EW gates before drawing a position.
 
 > **Trade assistant, not a profit bot.** No broker execution. Not investment advice.
 

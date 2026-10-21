@@ -26,7 +26,9 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-TV_MCP = Path(r"C:\Users\parlak\Downloads\tradingview-mcp")
+from bist_trader_mcp.tv_bridge import tv_mcp_root  # noqa: E402
+
+TV_MCP = tv_mcp_root()  # TRADINGVIEW_MCP_PATH or a default location
 VENV_PY = ROOT / ".venv" / "Scripts" / "python.exe"
 
 
@@ -325,7 +327,7 @@ healthCheck()
     except (urllib.error.URLError, TimeoutError, OSError) as e:
         warn(f"CDP not reachable: {e}")
         warn("Start TV in debug mode:")
-        warn(r"  C:\Users\parlak\Downloads\tradingview-mcp\scripts\launch_tv_debug.bat")
+        warn(f"  {TV_MCP / 'scripts' / 'launch_tv_debug.bat'}")
         return False
 
 

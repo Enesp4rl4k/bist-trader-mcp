@@ -18,7 +18,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "docs" / "images"
-TV_MCP = Path(r"C:\Users\parlak\Downloads\tradingview-mcp")
+from bist_trader_mcp.tv_bridge import tv_mcp_root  # noqa: E402
+
+TV_MCP = tv_mcp_root()  # TRADINGVIEW_MCP_PATH or a default location
 TV_SHOTS = TV_MCP / "screenshots"
 
 

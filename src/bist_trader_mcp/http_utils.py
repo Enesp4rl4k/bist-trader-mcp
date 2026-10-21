@@ -23,13 +23,15 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from . import __version__
+
 DEFAULT_TIMEOUT = 30.0
 DEFAULT_RETRIES = 3
 DEFAULT_BACKOFF_BASE = 1.0
 DEFAULT_BACKOFF_MAX = 10.0
 
 USER_AGENT = (
-    "bist-trader-mcp/0.3.0 (+https://github.com/Enesp4rl4k/bist-trader-mcp) "
+    f"bist-trader-mcp/{__version__} (+https://github.com/Enesp4rl4k/bist-trader-mcp) "
     "research tool - respects robots.txt"
 )
 

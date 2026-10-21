@@ -11,8 +11,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-DEFAULT_TV_MCP = Path(r"C:\Users\parlak\Downloads\tradingview-mcp")
-
 # TradingView Desktop has ONE chart. A multi-step sequence (set symbol → set
 # timeframe → read bars / draw) must not interleave with another thread's
 # sequence, or a tool reads the other symbol's bars. Hold TV_LOCK around every
@@ -31,11 +29,25 @@ def tv_sequence(fn):
     return wrapper
 
 
+def tv_mcp_candidates() -> list[Path]:
+    """Where a tradingview-mcp checkout usually lives (first existing wins)."""
+    repo_parent = Path(__file__).resolve().parents[3]
+    home = Path.home()
+    return [
+        repo_parent / "tradingview-mcp",          # sibling of this repo
+        home / "tradingview-mcp",
+        home / "Downloads" / "tradingview-mcp",
+        home / "Documents" / "tradingview-mcp",
+    ]
+
+
 def tv_mcp_root() -> Path:
+    """``TRADINGVIEW_MCP_PATH`` if set, else the first existing default location."""
     env = os.environ.get("TRADINGVIEW_MCP_PATH")
     if env:
         return Path(env)
-    return DEFAULT_TV_MCP
+    candidates = tv_mcp_candidates()
+    return next((p for p in candidates if p.is_dir()), candidates[0])
 
 
 def tv_call(*args: str, timeout: int = 90) -> dict[str, Any]:

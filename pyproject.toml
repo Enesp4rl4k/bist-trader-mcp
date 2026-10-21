@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "bist-trader-mcp"
-version = "0.4.0"
+dynamic = ["version"]
 description = "BIST Trader MCP — TR finance MCP server: TCMB EVDS, BIST EOD, KAP, VIOP, options math, Pine v6 recipes. Companion to tradesdontlie/tradingview-mcp."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -77,6 +77,9 @@ bist-trader-mcp = "bist_trader_mcp.__main__:main"
 bist-trader-daily = "bist_trader_mcp.daily_pipeline:main"
 bist-trader-dashboard = "bist_trader_mcp.dashboard_web:main"
 bist-trader-alerts = "bist_trader_mcp.tools:alerts_cli"
+
+[tool.hatch.version]
+path = "src/bist_trader_mcp/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/bist_trader_mcp"]

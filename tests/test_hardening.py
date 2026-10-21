@@ -299,3 +299,18 @@ def test_tradingview_sequences_do_not_interleave(monkeypatch):
     owners = [who for who, _ in log]
     runs = [owners[0]] + [b for a, b in zip(owners, owners[1:]) if a != b]
     assert len(runs) == 3, log
+
+
+def test_tradingview_path_env_wins_then_first_existing(monkeypatch, tmp_path):
+
+    import bist_trader_mcp.tv_bridge as tb
+
+    monkeypatch.setenv("TRADINGVIEW_MCP_PATH", str(tmp_path / "custom"))
+    assert tb.tv_mcp_root() == tmp_path / "custom"
+    monkeypatch.delenv("TRADINGVIEW_MCP_PATH")
+    a, b = tmp_path / "a", tmp_path / "b"
+    b.mkdir()
+    monkeypatch.setattr(tb, "tv_mcp_candidates", lambda: [a, b])
+    assert tb.tv_mcp_root() == b                      # first one that exists
+    b.rmdir()
+    assert tb.tv_mcp_root() == a                      # none exist → first candidate
