@@ -214,10 +214,18 @@ async function callTool(name, args) {
 function textOf(res) { return ((res && res.content) || []).map(c => c.text || "").join("\n"); }
 function parseText(res) { try { return JSON.parse(textOf(res)); } catch { return {}; } }
 
+// Links come from news feeds: only plain http(s) URLs may be opened.
+function safeUrl(url) {
+  try {
+    const u = new URL(String(url));
+    return u.protocol === "https:" || u.protocol === "http:" ? u.href : null;
+  } catch { return null; }
+}
 function openLink(url) {
-  if (!url) return;
-  if (MCP) request("ui/open-link", { url }).catch(() => toast("Link açılamadı"));
-  else window.open(url, "_blank", "noopener");
+  const href = safeUrl(url);
+  if (!href) { if (url) toast("Geçersiz link"); return; }
+  if (MCP) request("ui/open-link", { url: href }).catch(() => toast("Link açılamadı"));
+  else window.open(href, "_blank", "noopener,noreferrer");
 }
 async function askModel(text) {
   if (MCP) {
@@ -419,7 +427,7 @@ function drawChart() {
   g.fillStyle = col("--muted");
   if (c.t && c.t.length === n) for (let i = 0; i < n; i += Math.ceil(n / 6)) {
     const d = new Date(c.t[i] * 1000);
-    g.fillText(state.timeframe.match(/D|W/) ? d.toLocaleDateString("tr-TR", { day: "2-digit", month: "short" }) : d.toLocaleString("tr-TR", { day: "2-digit", hour: "2-digit", minute: "2-digit" }), x(i) - 16, H - 4);
+    g.fillText(/[DW]/.test(state.timeframe) ? d.toLocaleDateString("tr-TR", { day: "2-digit", month: "short" }) : d.toLocaleString("tr-TR", { day: "2-digit", hour: "2-digit", minute: "2-digit" }), x(i) - 16, H - 4);
   }
 }
 $("chart").addEventListener("mousemove", (e) => {

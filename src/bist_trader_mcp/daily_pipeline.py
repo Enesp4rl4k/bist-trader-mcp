@@ -371,7 +371,7 @@ def _store_daily_prices(bars_by_symbol: dict[str, dict[str, Any]]) -> int:
     try:
         with PanelStore() as store:
             return store.upsert_prices(rows)
-    except Exception:  # noqa: BLE001 — storage is best-effort, never fail the scan
+    except Exception:  # noqa: BLE001  (storage is best-effort, never fail the scan)
         return 0
 
 

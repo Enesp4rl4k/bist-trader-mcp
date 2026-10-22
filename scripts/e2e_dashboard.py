@@ -124,6 +124,12 @@ v.srcdoc = {js(html)};
         hp.wait_for_function("window.log.includes('tools/call')", timeout=5000)
         hp.screenshot(path=str(OUT / "dashboard_host.png"))
 
+        # Security: feed links may only open as http(s).
+        view = hp.query_selector("#v").content_frame()
+        got = view.evaluate("() => [safeUrl('javascript:alert(1)'), safeUrl('data:text/html,x'),"
+                            " safeUrl('https://kap.org.tr/a'), safeUrl('')]")
+        assert got == [None, None, "https://kap.org.tr/a", None], got
+
         # Security: a message from any window other than the host must be ignored.
         fake = ("{jsonrpc:'2.0', method:'ui/notifications/tool-result', params:{structuredContent:"
                 "{generated_at:'2026-01-01T00:00:00Z', state:{}, sections:{chart:{ok:false,"
