@@ -15,9 +15,12 @@ sanity checks. Every input records where it came from (``user`` / ``yahoo`` /
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 
 from . import valuation_pro as vp
+
+logger = logging.getLogger(__name__)
 
 BANKS = {"AKBNK", "GARAN", "ISCTR", "YKBNK", "HALKB", "VAKBN", "TSKB", "ALBRK", "SKBNK",
          "QNBTR", "QNBFB", "ICBCT", "KLNMA"}
@@ -43,10 +46,28 @@ class _Inputs:
 
 
 async def _default_history(symbol: str) -> dict[str, Any]:
+    """KAP statements first (via PanelStore, point-in-time), Yahoo as fallback."""
     from .fundamental_data import derive_drivers, fetch_financial_history
 
+    try:
+        out = await _kap_history(symbol)
+        if out.get("available"):
+            return out
+    except Exception as e:  # noqa: BLE001
+        logger.info("KAP statements unavailable for %s: %s", symbol, e)
     h = await fetch_financial_history(symbol)
-    return derive_drivers(h["history"])
+    return {**derive_drivers(h["history"]), "source": "yahoo"}
+
+
+async def _kap_history(symbol: str) -> dict[str, Any]:
+    from . import kap_financials as kf
+    from .data_store import PanelStore
+    from .fundamental_data import derive_drivers
+
+    with PanelStore() as store:
+        await kf.ingest(symbol, store)
+        st = kf.statements_as_of(store, symbol.strip().upper().split(":")[-1])
+    return {**derive_drivers(kf.history_from_statements(st)), "source": "kap"}
 
 
 async def _default_fundamentals(symbol: str) -> dict[str, Any]:
@@ -131,18 +152,19 @@ async def value_company(
 
     inp = _Inputs()
     s = inp.set
+    hsrc = auto.get("source", "yahoo")
     kind = model if model in ("industrial", "bank") else (
         "bank" if sym in BANKS else "industrial")
     px = s("price", (price, "user"), (fund.get("current_price"), "yahoo"))
     shares = s("shares_outstanding", (shares_outstanding, "user"),
-               (auto.get("shares_outstanding"), "yahoo"),
+               (auto.get("shares_outstanding"), hsrc),
                ((fund.get("market_cap") / px) if fund.get("market_cap") and px else None,
                 "derived"))
-    tax = s("tax_rate", (tax_rate, "user"), (auto.get("tax_rate"), "yahoo"), (0.25, "default"))
-    dbt = s("debt", (debt, "user"), (auto.get("debt"), "yahoo"), (0.0, "default"))
-    csh = s("cash", (cash, "user"), (auto.get("cash"), "yahoo"), (0.0, "default"))
+    tax = s("tax_rate", (tax_rate, "user"), (auto.get("tax_rate"), hsrc), (0.25, "default"))
+    dbt = s("debt", (debt, "user"), (auto.get("debt"), hsrc), (0.0, "default"))
+    csh = s("cash", (cash, "user"), (auto.get("cash"), hsrc), (0.0, "default"))
     mi = s("minority_interest", (minority_interest, "user"),
-           (auto.get("minority_interest"), "yahoo"), (0.0, "default"))
+           (auto.get("minority_interest"), hsrc), (0.0, "default"))
 
     # ---- cost of capital -----------------------------------------------------
     b = beta
@@ -190,9 +212,9 @@ async def value_company(
 
     # ---- bank model ----------------------------------------------------------
     if kind == "bank":
-        bv = s("book_value", (book_value, "user"), (auto.get("book_value"), "yahoo"))
-        r = s("roe", (roe, "user"), (auto.get("roe"), "yahoo"))
-        po = s("payout", (payout, "user"), (auto.get("payout"), "yahoo"), (0.3, "default"))
+        bv = s("book_value", (book_value, "user"), (auto.get("book_value"), hsrc))
+        r = s("roe", (roe, "user"), (auto.get("roe"), hsrc))
+        po = s("payout", (payout, "user"), (auto.get("payout"), hsrc), (0.3, "default"))
         if not bv or r is None:
             return {"error": "needs_input",
                     "detail": "Banka modeli için book_value ve roe gerekli.",
@@ -216,12 +238,12 @@ async def value_company(
             methods["residual_income"] = {"low": v * 0.85, "base": v, "high": v * 1.15}
     # ---- industrial model ----------------------------------------------------
     else:
-        rev = s("revenue0", (revenue0, "user"), (auto.get("revenue0"), "yahoo"))
+        rev = s("revenue0", (revenue0, "user"), (auto.get("revenue0"), hsrc))
         cagr = auto.get("revenue_cagr")
         g = s("revenue_growth", (revenue_growth, "user"),
-              (None if cagr is None else max(-0.2, min(cagr, 0.8)), "yahoo"), (0.05, "default"))
-        m = s("ebit_margin", (ebit_margin, "user"), (auto.get("ebit_margin_avg"), "yahoo"),
-              (auto.get("ebit_margin_last"), "yahoo"))
+              (None if cagr is None else max(-0.2, min(cagr, 0.8)), hsrc), (0.05, "default"))
+        m = s("ebit_margin", (ebit_margin, "user"), (auto.get("ebit_margin_avg"), hsrc),
+              (auto.get("ebit_margin_last"), hsrc))
         if not rev or m is None:
             return {"error": "needs_input",
                     "detail": "DCF için revenue0 ve ebit_margin gerekli (otomatik doldurma "
@@ -232,11 +254,11 @@ async def value_company(
             growth_fade_to=growth_fade_to if growth_fade_to is not None else tg,
             ebit_margin=m, margin_fade_to=margin_fade_to, years=years, tax_rate=tax,
             da_pct_revenue=s("da_pct_revenue", (da_pct_revenue, "user"),
-                             (auto.get("da_pct_revenue"), "yahoo"), (0.04, "default")),
+                             (auto.get("da_pct_revenue"), hsrc), (0.04, "default")),
             capex_pct_revenue=s("capex_pct_revenue", (capex_pct_revenue, "user"),
-                                (auto.get("capex_pct_revenue"), "yahoo"), (0.05, "default")),
+                                (auto.get("capex_pct_revenue"), hsrc), (0.05, "default")),
             nwc_pct_revenue=s("nwc_pct_revenue", (nwc_pct_revenue, "user"),
-                              (auto.get("nwc_pct_revenue"), "yahoo"), (0.10, "default")),
+                              (auto.get("nwc_pct_revenue"), hsrc), (0.10, "default")),
             terminal_growth=tg,
             # RONIC = WACC by default: growth in perpetuity creates no extra value
             terminal_roic=s("terminal_roic", (terminal_roic, "user"), (w, "default")),
@@ -270,7 +292,7 @@ async def value_company(
 
     # ---- dividends -------------------------------------------------------------
     dps = s("dividend_per_share", (dividend_per_share, "user"),
-            (auto.get("dividend_per_share"), "yahoo"))
+            (auto.get("dividend_per_share"), hsrc))
     if dps:
         ddm = vp.dividend_discount(dividend0=dps, cost_of_equity=ke,
                                    high_growth=g if kind != "bank" and isinstance(g, float)

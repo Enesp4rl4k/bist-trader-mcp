@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **KAP financial statements** — `get_kap_financials`: statements stored point-in-time in PanelStore (known from the KAP publish date or the legal filing deadline), TMS 29 flag, CFO analysis as of any date; `value_company` now auto-fills from KAP with Yahoo as fallback
+
 ## [0.5.0] — 2026-10-21
 
 ### Added

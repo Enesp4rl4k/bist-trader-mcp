@@ -160,7 +160,7 @@ Add single tools to any profile with `BIST_TOOLS_EXTRA=get_viop_iv_surface,get_y
 
 ### Company valuation
 
-`value_company` values a company in one call and shows where every input came from (`user` / `yahoo` / `derived` / `default`); your values always win over auto-fill.
+`value_company` values a company in one call and shows where every input came from (`user` / `kap` / `yahoo` / `derived` / `default`); your values always win over auto-fill.
 
 - **Industrials:** driver-based FCFF DCF — revenue growth (fading to terminal) → EBIT margin → NOPAT − (capex − D&A + ΔNWC); mid-year discounting; terminal value with the value-driver formula (RONIC defaults to WACC, the conservative "growth adds no value" case); full bridge to equity (debt, cash, minorities, non-operating assets). Plus a WACC × g sensitivity grid, bear/base/bull scenarios, a Monte Carlo value distribution with P(value > price), and a DDM when dividends are paid.
 - **Banks** (auto for AKBNK, GARAN, ISCTR, YKBNK, HALKB, VAKBN… or `model="bank"`): residual income + justified P/B — FCFF is meaningless for a lender.
@@ -168,13 +168,27 @@ Add single tools to any profile with `BIST_TOOLS_EXTRA=get_viop_iv_surface,get_y
 - **Cost of capital:** CAPM on your `risk_free` (TL: 10Y DİBS) with a beta estimated vs XU100 (Blume-adjusted, `estimate_equity_beta`), ERP (default 5.5%, an assumption), optional country and size premia, market-value weights.
 - **High inflation:** pass `expected_inflation` → terminal growth = 2% real + inflation, and sanity checks flag nominal/real mixes, a terminal value above 85% of EV, a thin WACC − g spread or negative terminal FCFF.
 
-Auto-fill with `symbol` reads Yahoo's annual statements, price and prices for beta — best effort; check the figures against KAP (TMS 29 restatements can make old years non-comparable). The risk-free rate is not fetched automatically: pass `risk_free` or `wacc`.
+Auto-fill with `symbol` reads the KAP annual statements (see below; Yahoo's statements are the fallback), the price, and price history for beta. TMS 29 restatements can make years before FY2023 non-comparable. The risk-free rate is not fetched automatically: pass `risk_free` or `wacc`.
 
 ```
 value_company(symbol="THYAO", risk_free=0.30, expected_inflation=0.25)
 value_company(symbol="GARAN", risk_free=0.30)                     # bank model
 value_company(revenue0=100e9, revenue_growth=0.4, ebit_margin=0.12, wacc=0.33,
               expected_inflation=0.25, shares_outstanding=1e9, price=100)
+```
+
+### KAP financial statements (point-in-time)
+
+`get_kap_financials(symbol, as_of=None)` pulls the statements filed with KAP (via İş Yatırım's MaliTablo service) and stores them in the local panel DB (`BIST_PANEL_DB`). It then returns the annual figures that were **public on `as_of`**, plus the full CFO analysis: ratios, DuPont, Piotroski, Altman, Beneish and a selection score.
+
+- **When a row counts as known:** from the KAP publish date. If that date is not available, from the legal filing deadline (consolidated: Q1/9M +40, H1 +60, annual +70 days), so a backtest is never early.
+- **TMS 29:** non-bank rows from FY2023 on are flagged as inflation-adjusted. Banks were exempt, so their rows are not flagged. A note warns when the current and prior years are not comparable.
+- **Matching:** line items are matched by their Turkish/English description, not by code. Interim periods are cumulative, so only the annual rows feed the history.
+- **Offline use:** `refresh=false` reads only the local DB.
+
+```
+get_kap_financials(symbol="THYAO")                      # today
+get_kap_financials(symbol="THYAO", as_of="2024-06-01")  # what was known then
 ```
 
 ### Company events

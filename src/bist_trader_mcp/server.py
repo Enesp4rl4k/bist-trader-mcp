@@ -96,6 +96,7 @@ from .tools import (
     get_global_pulse,
     get_health_status,
     get_kap_disclosures,
+    get_kap_financials,
     get_market_profile,
     get_market_summary,
     get_mkk_market_stats,
@@ -3375,7 +3376,7 @@ _register(
         "residual income + justified P/B. Optional peer multiples. Returns a football-"
         "field blend, margin of safety, sanity checks (incl. nominal/real TL mismatch) "
         "and the source of every input. With `symbol`, history/price/beta are auto-filled "
-        "(Yahoo, best effort; your values always win). Needs `risk_free` (TL: 10Y DİBS, "
+        "(KAP statements, Yahoo fallback; your values always win). Needs `risk_free` (TL: 10Y DİBS, "
         "decimal) or `wacc`. Rates are decimals."
     ),
     input_schema={
@@ -3416,6 +3417,33 @@ _register(
     },
     handler=lambda args: value_company(**args),
     timeout=180,
+)
+
+_register(
+    "get_kap_financials",
+    description=(
+        "FUNDAMENTALS: official KAP statements (via İş Yatırım) stored point-in-time in "
+        "the local panel DB, then the annual figures that were public on `as_of` "
+        "(default today) + CFO analysis (ratios, Piotroski, Altman, Beneish, growth, "
+        "selection score). Rows count as known from the KAP publish date, else the "
+        "legal filing deadline — safe for backtests. value_company uses the same data."
+    ),
+    input_schema={
+        "type": "object",
+        "required": ["symbol"],
+        "properties": {
+            "symbol": {"type": "string"},
+            "as_of": {"type": "string", "description": "YYYY-MM-DD; default today"},
+            "years": {"type": "integer", "default": 5},
+            "refresh": {"type": "boolean", "default": True,
+                        "description": "false: read the local DB only (no network)"},
+            "analyze": {"type": "boolean", "default": True},
+        },
+    },
+    handler=lambda args: get_kap_financials(
+        args["symbol"], args.get("as_of"), int(args.get("years") or 5),
+        bool(args.get("refresh", True)), bool(args.get("analyze", True))),
+    timeout=120,
 )
 
 _register(

@@ -4496,6 +4496,50 @@ async def value_company(symbol: str | None = None, **kwargs: Any) -> dict[str, A
     return {"source": "bist-trader-mcp — company valuation", **res}
 
 
+async def get_kap_financials(
+    symbol: str,
+    as_of: str | None = None,
+    years: int = 5,
+    refresh: bool = True,
+    analyze: bool = True,
+) -> dict[str, Any]:
+    """KAP statements → PanelStore (point-in-time) → annual figures as of a date."""
+    from . import kap_financials as kf
+    from .data_store import PanelStore
+
+    try:
+        sym = validate_symbol(symbol).split(":")[-1]
+        if as_of:
+            date.fromisoformat(as_of[:10])
+        years = max(1, min(int(years), 10))
+        with PanelStore() as store:
+            ingest = None
+            if refresh:
+                ingest = await kf.ingest(sym, store, periods=kf.default_periods(years=years))
+            st = kf.statements_as_of(store, sym, as_of)
+            cur, prior = kf.financial_periods_as_of(store, sym, as_of)
+    except SourceError as e:
+        return {"error": "data_error", "detail": str(e),
+                "hint": "Kaynak erişilemedi; analyze_financial_statements'a kalemleri elle ver."}
+    except (TypeError, ValueError) as e:
+        return {"error": "bad_input", "detail": str(e)}
+    if not st:
+        return {"error": "no_data", "detail": f"{sym} için {as_of or 'bugün'} itibarıyla "
+                "yayımlanmış yıllık tablo yok.", "ingest": ingest}
+    out: dict[str, Any] = {
+        "source": "KAP (İş Yatırım MaliTablo) → PanelStore",
+        "symbol": sym, "as_of": as_of or date.today().isoformat(),
+        "ingest": ingest, "annual": st,
+        "point_in_time": "Satırlar KAP yayın tarihinde (yoksa yasal son gün) bilinir sayılır.",
+    }
+    if analyze and cur:
+        note = cur.pop("_note", None)
+        out["analysis"] = _analyze_financials(cur, prior, ticker=sym)
+        if note:
+            out["note"] = note
+    return out
+
+
 async def estimate_equity_beta(symbol: str, index: str = "XU100",
                                blume: bool = True) -> dict[str, Any]:
     """Beta of a stock vs an index from ~2 years of daily prices (public data)."""
