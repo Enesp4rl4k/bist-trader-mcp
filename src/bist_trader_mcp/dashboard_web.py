@@ -96,7 +96,7 @@ def _make_handler(
             except (ValueError, TypeError):
                 return self._json(400, {"error": "bad_request"})
             if name not in ALLOWED_TOOLS or not isinstance(args, dict):
-                return self._json(403, {"error": "tool_not_allowed", "detail": name})
+                return self._json(403, {"error": "tool_not_allowed"})  # do not echo input
             try:
                 fut = asyncio.run_coroutine_threadsafe(dispatch(name, args), loop)
                 result = fut.result(timeout=120)

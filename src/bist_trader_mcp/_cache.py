@@ -149,7 +149,7 @@ def cache_prune(grace_seconds: int = 24 * 3600) -> dict[str, int]:
                 saved_at = saved_at.replace(tzinfo=timezone.utc)
             age = (now - saved_at).total_seconds()
             expired = age > int(data.get("ttl_seconds") or 0) + grace_seconds
-        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+        except (OSError, ValueError, KeyError, TypeError):  # JSONDecodeError is a ValueError
             expired = True  # unreadable / corrupt entry
         if expired:
             try:

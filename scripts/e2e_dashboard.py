@@ -86,6 +86,7 @@ def main() -> None:
         html = dashboard_web.dashboard_html()
         host = f"""<!doctype html><html><body style="margin:0;background:#fff">
 <iframe id="v" style="width:1300px;height:1100px;border:0"></iframe>
+<iframe id="evil" style="display:none" srcdoc="<p>other frame</p>"></iframe>
 <script>
 const SNAP = {js(snap)};
 window.log = [];
@@ -122,6 +123,19 @@ v.srcdoc = {js(html)};
         frame.locator("#refresh").click()
         hp.wait_for_function("window.log.includes('tools/call')", timeout=5000)
         hp.screenshot(path=str(OUT / "dashboard_host.png"))
+
+        # Security: a message from any window other than the host must be ignored.
+        fake = ("{jsonrpc:'2.0', method:'ui/notifications/tool-result', params:{structuredContent:"
+                "{generated_at:'2026-01-01T00:00:00Z', state:{}, sections:{chart:{ok:false,"
+                "error:'INJECTED'}}}}}")
+        evil = hp.query_selector("#evil").content_frame()
+        assert evil is not None and evil != hp.main_frame
+        evil.evaluate(f"() => parent.frames[0].postMessage({fake}, '*')")
+        hp.wait_for_timeout(400)
+        assert frame.locator("#analysis", has_text="INJECTED").count() == 0, "spoofed message accepted"
+        # control: the same message from the real host IS rendered (the check above is live)
+        hp.evaluate(f"() => document.getElementById('v').contentWindow.postMessage({fake}, '*')")
+        frame.locator("#analysis", has_text="INJECTED").wait_for(timeout=3000)
         b.close()
     dashboard_web.stop()
     if errors:

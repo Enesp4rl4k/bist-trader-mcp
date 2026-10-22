@@ -158,7 +158,18 @@ let rpcId = 1;
 const pending = new Map();
 const noteHandlers = {};
 
-function post(msg) { window.parent.postMessage(msg, "*"); }
+// Only our parent (the MCP host) may talk to us. Its origin is pinned on the
+// first message it sends, so another frame or a later navigation cannot inject
+// fake tool results. Sandboxed hosts can have an opaque origin ("null"), which
+// postMessage cannot target — then "*" is the only option for outgoing calls.
+let hostOrigin = null;
+function targetOrigin() { return hostOrigin && hostOrigin !== "null" ? hostOrigin : "*"; }
+function fromHost(ev) {
+  if (ev.source !== window.parent) return false;
+  if (hostOrigin === null) hostOrigin = ev.origin;
+  return ev.origin === hostOrigin;
+}
+function post(msg) { window.parent.postMessage(msg, targetOrigin()); }
 function request(method, params, timeoutMs = 60000) {
   const id = rpcId++;
   post({ jsonrpc: "2.0", id, method, params });
@@ -169,6 +180,7 @@ function request(method, params, timeoutMs = 60000) {
 }
 function notify(method, params) { post({ jsonrpc: "2.0", method, params }); }
 window.addEventListener("message", (ev) => {
+  if (!fromHost(ev)) return;
   const m = ev.data;
   if (!m || m.jsonrpc !== "2.0") return;
   if (m.id !== undefined && pending.has(m.id) && (m.result !== undefined || m.error)) {
@@ -240,11 +252,11 @@ function save() { try { localStorage.setItem("bt_state", JSON.stringify(state));
 // ---------------------------------------------------------------- helpers
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
-const fmt = (x, d = 2) => x == null || isNaN(x) ? "–" : Number(x).toLocaleString("tr-TR", { minimumFractionDigits: d, maximumFractionDigits: d });
+const fmt = (x, d = 2) => x == null || Number.isNaN(Number(x)) ? "–" : Number(x).toLocaleString("tr-TR", { minimumFractionDigits: d, maximumFractionDigits: d });
 const pct = (x) => x == null ? "–" : `<span class="${x >= 0 ? "up" : "dn"}">${x >= 0 ? "+" : ""}${fmt(x)}%</span>`;
 function toast(t) { const el = $("toast"); el.textContent = t; el.style.display = "block"; clearTimeout(el._t); el._t = setTimeout(() => el.style.display = "none", 3500); }
 function ago(iso) {
-  const t = Date.parse(iso); if (isNaN(t)) return "";
+  const t = Date.parse(iso); if (Number.isNaN(t)) return "";
   const m = Math.round((Date.now() - t) / 60000);
   return m < 1 ? "şimdi" : m < 60 ? m + " dk" : m < 1440 ? Math.round(m / 60) + " sa" : Math.round(m / 1440) + " g";
 }

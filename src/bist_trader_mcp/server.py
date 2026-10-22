@@ -13,6 +13,7 @@ import asyncio
 import contextvars
 import inspect
 import json
+import math
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -3654,7 +3655,7 @@ def _compact_numbers(x: Any) -> Any:
     smaller values keep 6 significant digits (enough for FX pips and tiny coins).
     """
     if isinstance(x, float):
-        if x != x or x in (float("inf"), float("-inf")):
+        if not math.isfinite(x):  # NaN / ±inf are not valid JSON
             return None
         return round(x, 2) if abs(x) >= 1000 else float(f"{x:.6g}")
     if isinstance(x, dict):

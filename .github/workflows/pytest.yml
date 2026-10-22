@@ -1,7 +1,9 @@
 name: pytest
 
 on:
+  # PR branches run via pull_request only (push + pull_request ran everything twice)
   push:
+    branches: [main]
   pull_request:
 
 jobs:
