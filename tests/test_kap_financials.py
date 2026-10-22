@@ -197,3 +197,27 @@ def test_tool_returns_point_in_time_analysis(monkeypatch):
     out = asyncio.run(tools.get_kap_financials("THYAO", as_of="2020-01-01", refresh=False))
     assert out["error"] == "no_data"
     assert asyncio.run(tools.get_kap_financials("bad sym!"))["error"] == "bad_input"
+
+
+def test_dashboard_value_button(monkeypatch):
+    from bist_trader_mcp import tools
+
+    calls = {}
+
+    async def fin(sym, *a, **k):
+        return {"symbol": sym, "analysis": {"selection": {
+            "score": 42.0, "grade": "B", "red_flags": ["earnings_manipulation"]}}}
+
+    async def val(sym, **kw):
+        calls["rf"] = kw.get("risk_free")
+        return {"summary_tr": "THYAO: harmanlanmış değer 400"}
+
+    monkeypatch.setattr(tools, "get_kap_financials", fin)
+    monkeypatch.setattr(tools, "value_company", val)
+    monkeypatch.delenv("BIST_RISK_FREE", raising=False)
+    out = asyncio.run(tools.dashboard_action("value", "BIST:THYAO"))
+    assert out["ok"] and "valuation" not in out  # never guesses a risk-free rate
+    assert "+42/100 (B)" in out["summary_tr"] and "BIST_RISK_FREE" in out["summary_tr"]
+    monkeypatch.setenv("BIST_RISK_FREE", "0.3")
+    out = asyncio.run(tools.dashboard_action("value", "THYAO"))
+    assert calls["rf"] == 0.3 and out["summary_tr"].startswith("THYAO: harmanlanmış değer")

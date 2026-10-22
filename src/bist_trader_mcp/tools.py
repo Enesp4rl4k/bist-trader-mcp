@@ -4820,7 +4820,7 @@ async def dashboard_action(
     timeframe: str = "1D",
     plan: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Buttons of the dashboard: tv_open, tv_draw_plan, risk_check, journal_add."""
+    """Buttons of the dashboard: tv_open, value, tv_draw_plan, risk_check, journal_add."""
     try:
         sym = validate_symbol(symbol)
         timeframe = validate_timeframe(timeframe)
@@ -4835,6 +4835,8 @@ async def dashboard_action(
         ok = a.get("success", True) is not False and b.get("success", True) is not False
         return {"ok": ok, "summary_tr": f"TradingView: {sym_tv} {timeframe} açıldı." if ok
                 else f"TradingView'a ulaşılamadı: {a.get('error') or b.get('error')}"}
+    if action == "value":
+        return await _dashboard_value(sym)
     if not plan or plan.get("entry") is None or plan.get("stop") is None:
         return {"error": "no_plan", "detail": "Bu işlem için aktif plan gerekli."}
     direction = plan.get("direction") or "long"
@@ -4868,6 +4870,42 @@ async def dashboard_action(
         return {**risk, "trade_id": logged["trade_id"],
                 "summary_tr": f"Günlüğe eklendi ({logged['trade_id']}). " + risk["summary_tr"]}
     return {"error": "unknown_action", "detail": action}
+
+
+async def _dashboard_value(sym: str) -> dict[str, Any]:
+    """"Değerle" button: KAP quality check + valuation when a risk-free rate is set.
+
+    The risk-free rate is never guessed: it comes from ``BIST_RISK_FREE`` (decimal,
+    e.g. 0.30 for the TL 10Y DİBS); without it only the statement analysis runs.
+    """
+    ticker = sym.split(":")[-1]
+    fin = await get_kap_financials(ticker)
+    parts: list[str] = []
+    if fin.get("error"):
+        parts.append(f"KAP tabloları: {fin.get('detail') or fin['error']}")
+    else:
+        sel = (fin.get("analysis") or {}).get("selection") or {}
+        if sel.get("score") is not None:
+            parts.append(f"Finansal kalite {sel['score']:+.0f}/100 ({sel.get('grade', '?')})")
+        flags = sel.get("red_flags") or []
+        if flags:
+            parts.append("Uyarılar: " + "; ".join(map(str, flags[:3])))
+    out: dict[str, Any] = {"ok": not fin.get("error"), "financials": fin}
+    raw_rf = os.environ.get("BIST_RISK_FREE")
+    try:
+        rf = float(raw_rf) if raw_rf else None
+    except ValueError:
+        rf = None
+    if rf is None:
+        parts.append("Değerleme için BIST_RISK_FREE (ör. 0.30) ayarla ya da "
+                     "\"Claude'a sor\" ile risksiz faizi ver.")
+    else:
+        val = await value_company(ticker, risk_free=rf)
+        out["valuation"] = val
+        parts.insert(0, val.get("summary_tr") or val.get("detail") or "Değerleme yapılamadı.")
+        out["ok"] = out["ok"] or not val.get("error")
+    out["summary_tr"] = " · ".join(parts)
+    return out
 
 
 async def dashboard_dispatch(name: str, args: dict[str, Any]) -> Any:

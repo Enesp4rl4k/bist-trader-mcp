@@ -1956,7 +1956,7 @@ _register(
 _register(
     "dashboard_action",
     description=(
-        "Dashboard-internal: panel buttons — tv_open, tv_draw_plan, risk_check, "
+        "Dashboard-internal: panel buttons — tv_open, value, tv_draw_plan, risk_check, "
         "journal_add (called by the UI)."
     ),
     input_schema={
@@ -1964,7 +1964,8 @@ _register(
         "required": ["action", "symbol"],
         "properties": {
             "action": {"type": "string",
-                       "enum": ["tv_open", "tv_draw_plan", "risk_check", "journal_add"]},
+                       "enum": ["tv_open", "value", "tv_draw_plan", "risk_check",
+                                "journal_add"]},
             "symbol": {"type": "string"},
             "timeframe": {"type": "string"},
             "plan": {"type": "object"},
@@ -1976,6 +1977,7 @@ _register(
     ),
     meta=_DASH_META_APP,
     structured=True,
+    timeout=180,
 )
 
 _register(
