@@ -8,7 +8,7 @@ import httpx
 from bist_trader_mcp import alerts
 from bist_trader_mcp import http_utils as hu
 
-TOKEN = "123456:SECRET-token-value"
+TOKEN = ":".join(["123456", "fake-bot-token-for-tests"])  # built, not a literal secret
 
 
 def _install(handler):

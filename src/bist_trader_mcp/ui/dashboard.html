@@ -103,7 +103,7 @@ canvas { width:100%; height:100%; display:block; }
       <h3>İzleme listesi <span class="small" id="wlNote"></span></h3>
       <table id="wl"></table>
       <form id="addForm" class="bar" style="margin-top:8px">
-        <input id="addInput" placeholder="Sembol ekle (ASELS)" style="flex:1;min-width:0">
+        <input id="addInput" aria-label="Sembol ekle" placeholder="Sembol ekle (ASELS)" style="flex:1;min-width:0">
         <button>+</button>
       </form>
     </div>
@@ -164,10 +164,8 @@ const noteHandlers = {};
 // postMessage cannot target — then "*" is the only option for outgoing calls.
 let hostOrigin = null;
 function targetOrigin() { return hostOrigin && hostOrigin !== "null" ? hostOrigin : "*"; }
-function fromHost(ev) {
-  if (ev.source !== window.parent) return false;
-  if (hostOrigin === null) hostOrigin = ev.origin;
-  return ev.origin === hostOrigin;
+function pinHost(ev) {
+  if (ev.source === window.parent && hostOrigin === null) hostOrigin = ev.origin;
 }
 function post(msg) { window.parent.postMessage(msg, targetOrigin()); }
 function request(method, params, timeoutMs = 60000) {
@@ -180,7 +178,8 @@ function request(method, params, timeoutMs = 60000) {
 }
 function notify(method, params) { post({ jsonrpc: "2.0", method, params }); }
 window.addEventListener("message", (ev) => {
-  if (!fromHost(ev)) return;
+  pinHost(ev);
+  if (ev.source !== window.parent || ev.origin !== hostOrigin) return;
   const m = ev.data;
   if (!m || m.jsonrpc !== "2.0") return;
   if (m.id !== undefined && pending.has(m.id) && (m.result !== undefined || m.error)) {
@@ -496,7 +495,11 @@ $("panelsBox").innerHTML = Object.entries(PANELS).map(([k, v]) => `<label><input
 $("srcSel").value = state.chart_source;
 $("srcSel").addEventListener("change", (e) => { state.chart_source = e.target.value; save(); refresh(true); });
 $("panelsBox").addEventListener("change", (e) => {
-  const k = e.target.dataset.panel; if (!k) return; state.panels[k] = e.target.checked; save(); refresh(true);
+  const k = e.target.dataset.panel;
+  if (!k) return;
+  state.panels[k] = e.target.checked;
+  save();
+  refresh(true);
 });
 $("fullBtn").addEventListener("click", () => request("ui/request-display-mode", { mode: hostCtx.displayMode === "fullscreen" ? "inline" : "fullscreen" })
   .then(r => { hostCtx.displayMode = r.mode; drawChart(); }).catch(() => {}));

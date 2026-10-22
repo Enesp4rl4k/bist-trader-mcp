@@ -420,5 +420,5 @@ def run_backtests(jobs: list[dict[str, Any]], workers: int | None = None) -> lis
                 except Exception as e:  # noqa: BLE001
                     out.append(e)
             return out
-    except (OSError, BrokenProcessPool, RuntimeError):
+    except (OSError, RuntimeError):  # BrokenProcessPool is a RuntimeError
         return inline()

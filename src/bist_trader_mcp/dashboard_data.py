@@ -56,7 +56,7 @@ class DashboardState:
         d = d or {}
         wl = [str(s).strip().upper() for s in (d.get("watchlist") or DEFAULT_WATCHLIST)
               if str(s).strip()][:20]
-        panels = {p: True for p in PANELS}
+        panels = dict.fromkeys(PANELS, True)
         for k, v in (d.get("panels") or {}).items():
             if k in panels:
                 panels[k] = bool(v)
