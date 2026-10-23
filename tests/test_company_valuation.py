@@ -36,7 +36,7 @@ def test_parse_and_derive():
     h = parse_timeseries(PAYLOAD)
     assert [d for d, _ in h["revenue"]] == ["2023-12-31", "2024-12-31"]  # None dropped, sorted
     d = derive_drivers(h)
-    assert d["revenue0"] == 1210.0
+    assert d["revenue0"] == pytest.approx(1210.0)
     assert d["revenue_cagr"] == pytest.approx(0.21)
     assert d["ebit_margin_last"] == pytest.approx(200 / 1210, abs=1e-4)
     assert d["da_pct_revenue"] == pytest.approx(0.04)
@@ -60,15 +60,15 @@ def _walk(beta, n=260, seed=2):
 def _loaders(history=None, fund=None, beta=1.2, fail_bars=False):
     stock, index = _walk(beta)
 
-    async def lh(sym):
+    async def lh(sym):  # NOSONAR - test double for an async API
         return derive_drivers(parse_timeseries(PAYLOAD)) if history is None else history
 
-    async def lf(sym):
+    async def lf(sym):  # NOSONAR - test double for an async API
         if fund == "fail":
             raise RuntimeError("yahoo down")
         return fund or {"current_price": 20.0, "market_cap": 1000.0}
 
-    async def lb(sym):
+    async def lb(sym):  # NOSONAR - test double for an async API
         if fail_bars:
             raise RuntimeError("no bars")
         return index if sym == "XU100" else stock
@@ -88,7 +88,7 @@ def test_industrial_autofill_end_to_end():
     assert r["inputs"]["terminal_growth"] == pytest.approx(1.02 * 1.03 - 1)
     assert r["dcf"]["assumptions"]["terminal_roic"] == pytest.approx(r["inputs"]["wacc"])
     ff = r["football_field"]
-    assert ff["available"] and ff["price"] == 20.0 and "dcf" in ff["methods"]
+    assert ff["available"] and ff["price"] == pytest.approx(20.0) and "dcf" in ff["methods"]
     assert r["monte_carlo"]["p25"] <= r["dcf"]["fair_value_per_share"] <= r["monte_carlo"]["p75"]
     assert set(r["scenarios"]["scenarios"]) == {"ayı", "baz", "boğa"}
     assert "ddm" in r  # dividends paid → DDM included
@@ -98,7 +98,7 @@ def test_industrial_autofill_end_to_end():
 def test_user_values_win_over_autofill():
     r = _run(symbol="THYAO", wacc=0.12, ebit_margin=0.30, shares_outstanding=100,
              beta=0.9, **_loaders())
-    assert r["sources"]["ebit_margin"] == "user" and r["inputs"]["ebit_margin"] == 0.30
+    assert r["sources"]["ebit_margin"] == "user" and r["inputs"]["ebit_margin"] == pytest.approx(0.30)
     assert r["sources"]["shares_outstanding"] == "user"
     assert r["sources"]["wacc"] == "user" and r["beta"] is None
 

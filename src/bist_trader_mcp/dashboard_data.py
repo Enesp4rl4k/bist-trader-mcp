@@ -48,7 +48,7 @@ class DashboardState:
     symbol: str = "THYAO"
     timeframe: str = "1D"
     watchlist: list[str] = field(default_factory=lambda: list(DEFAULT_WATCHLIST))
-    panels: dict[str, bool] = field(default_factory=lambda: {p: True for p in PANELS})
+    panels: dict[str, bool] = field(default_factory=lambda: dict.fromkeys(PANELS, True))
     chart_source: str = "auto"
 
     @classmethod

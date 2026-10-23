@@ -22,14 +22,14 @@ class Fakes:
     def __init__(self):
         self.bar_calls = []
 
-    async def quotes(self, pairs):
+    async def quotes(self, pairs):  # NOSONAR - test double for an async API
         return [{"symbol": a, "last": 100.0, "change_pct": 1.5, "as_of": "x"} for a, _ in pairs]
 
-    async def bars(self, symbol, timeframe, source):
+    async def bars(self, symbol, timeframe, source):  # NOSONAR - test double for an async API
         self.bar_calls.append((symbol, timeframe, source))
         return _bars(seed=len(symbol))
 
-    async def news(self, watchlist):
+    async def news(self, watchlist):  # NOSONAR - test double for an async API
         return [
             {"source": "KAP", "title": "ASELS yeni sözleşme", "tickers": ["ASELS"],
              "time": "2026-09-24T10:00", "link": "https://kap.org.tr/x"},
@@ -39,7 +39,7 @@ class Fakes:
              "time": "2026-09-24T08:00", "link": "https://y"},
         ]
 
-    async def risk(self):
+    async def risk(self):  # NOSONAR - test double for an async API
         return {"heat_pct": 1.0, "max_open_risk_pct": 6.0, "summary_tr": "ok",
                 "positions": [], "circuit_breaker": False}
 
@@ -159,7 +159,7 @@ def web():
 
     threading.Thread(target=loop.run_forever, daemon=True).start()
 
-    async def dispatch(name, args):
+    async def dispatch(name, args):  # NOSONAR - test double for an async API
         return {"echo": name, "args": args}
 
     url = dashboard_web.start(loop, dispatch, port=0)

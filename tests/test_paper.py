@@ -68,7 +68,7 @@ def test_backtest_expectancy_read_from_saved_weights():
     pa_weights.save_weights({"active": True, "created_at": "x",
                              "validation": {"oos_baseline": {"expectancy_r": 0.21,
                                                              "trades": 60}}})
-    assert paper.backtest_expectancy()["expectancy_r"] == 0.21
+    assert paper.backtest_expectancy()["expectancy_r"] == pytest.approx(0.21)
 
 
 def test_dashboard_trade_is_tracked_even_outside_the_universe(monkeypatch):
@@ -76,7 +76,7 @@ def test_dashboard_trade_is_tracked_even_outside_the_universe(monkeypatch):
     from bist_trader_mcp import tools
     from bist_trader_mcp.pa_weights import use_weights
 
-    async def fake_risk(*a, **k):
+    async def fake_risk(*a, **k):  # NOSONAR - test double for an async API
         return {"approved": True, "sizing": {"quantity": 10}, "summary_tr": "ONAY",
                 "checks": [], "blocking": [], "warnings": []}
 
@@ -92,7 +92,7 @@ def test_dashboard_trade_is_tracked_even_outside_the_universe(monkeypatch):
     rows[0]["plan_snapshot"]["signal_time"] = bars["times"][400]
     _journal(rows)
 
-    async def load(sym):
+    async def load(sym):  # NOSONAR - test double for an async API
         return bars
 
     async def run():

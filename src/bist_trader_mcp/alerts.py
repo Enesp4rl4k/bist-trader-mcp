@@ -17,6 +17,7 @@ and is sent once. The bot token never appears in results, errors or logs.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from datetime import datetime, timezone
@@ -154,6 +155,14 @@ async def _send_telegram(text: str) -> tuple[bool, str | None]:
     return False, _redact(str((res or {}).get("description") or "telegram error"))
 
 
+def _append_outbox(fresh: list[dict[str, Any]]) -> None:
+    box = outbox_path()
+    with locked(box):
+        with box.open("a", encoding="utf-8") as f:
+            for a in fresh:
+                f.write(json.dumps(a, ensure_ascii=False) + "\n")
+
+
 async def deliver(alerts: list[dict[str, Any]], *, send: bool = True) -> dict[str, Any]:
     """Drop already-sent keys, append the rest to the outbox, push to Telegram."""
     if not alerts:
@@ -171,11 +180,7 @@ async def deliver(alerts: list[dict[str, Any]], *, send: bool = True) -> dict[st
         atomic_write_text(state_p, json.dumps(sent_keys))
     if not fresh:
         return {"new": 0, "sent": 0, "telegram": telegram_configured(), "errors": []}
-    box = outbox_path()
-    with locked(box):
-        with box.open("a", encoding="utf-8") as f:
-            for a in fresh:
-                f.write(json.dumps(a, ensure_ascii=False) + "\n")
+    await asyncio.to_thread(_append_outbox, fresh)
     sent, errors = 0, []
     if send and telegram_configured():
         icon = {"good": "✅", "bad": "⚠️", "info": "ℹ️"}

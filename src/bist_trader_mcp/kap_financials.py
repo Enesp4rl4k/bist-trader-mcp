@@ -26,6 +26,7 @@ Conventions worth knowing:
 
 from __future__ import annotations
 
+import math
 import re
 import unicodedata
 from datetime import date, datetime, timedelta, timezone
@@ -124,7 +125,7 @@ def _num(v: Any) -> float | None:
         x = float(str(v).replace(",", "")) if isinstance(v, str) else float(v)
     except (TypeError, ValueError):
         return None
-    return x if x == x and abs(x) != float("inf") else None
+    return x if math.isfinite(x) else None
 
 
 def _compiled() -> list[tuple[str, tuple[str, ...], tuple[str, ...]]]:

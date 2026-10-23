@@ -86,13 +86,13 @@ def test_backtest_has_no_lookahead_under_random_truncation():
 
     from .test_candle_forecast import _series
 
-    rng = random.Random(7)
+    rng = random.Random(7)  # NOSONAR - seeded test data, not security
     checked = 0
     for seed in range(6):
         o, h, l, c = _series(n=460, drift=rng.uniform(-0.002, 0.003), vol=0.014, seed=seed)
         full = backtest_simple_pa(o, h, l, c, max_hold=10)["trades"]
         for _ in range(3):
-            k = rng.randint(200, 440)
+            k = rng.randint(200, 440)  # NOSONAR - seeded test data
             cut = backtest_simple_pa(o[:k], h[:k], l[:k], c[:k], max_hold=10)["trades"]
             done_full = [t for t in full if t["exit_bar"] < k - 1]
             done_cut = [t for t in cut if t["exit_bar"] < k - 1 and t["exit_reason"] != "open"]

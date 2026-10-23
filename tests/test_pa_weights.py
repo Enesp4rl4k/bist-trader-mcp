@@ -23,7 +23,7 @@ def _score():
 
 
 def test_no_file_means_neutral_weights():
-    assert pa_weights.factor_weight("bullish_structure") == 1.0
+    assert pa_weights.factor_weight("bullish_structure") == pytest.approx(1.0)
     assert pa_weights.setup_track_record("trend_retest") is None
 
 
@@ -43,9 +43,9 @@ def test_saved_weights_apply_only_when_active():
         resistances=[{"price": 105.0}], structure="bullish", atr_val=2.0, volumes=None,
     )
     pa_weights.save_weights({**doc, "active": True})
-    assert pa_weights.factor_weight("bullish_structure") == 0.0
+    assert pa_weights.factor_weight("bullish_structure") == pytest.approx(0.0)
     with pa_weights.use_weights(None):  # measurement mode ignores the file
-        assert pa_weights.factor_weight("bullish_structure") == 1.0
+        assert pa_weights.factor_weight("bullish_structure") == pytest.approx(1.0)
 
 
 def _first_plan():
@@ -76,7 +76,7 @@ def test_losing_setup_type_is_vetoed_and_winning_one_annotated():
     with pa_weights.use_weights(good):
         kept = simple_price_action(c, h, l, o)
     assert kept["verdict"] == r["verdict"]
-    assert kept["plan"]["track_record"]["avg_r"] == 0.4
+    assert kept["plan"]["track_record"]["avg_r"] == pytest.approx(0.4)
 
     few = {"setup_track_record": {st: {"trades": 5, "win_rate_pct": 0.0, "avg_r": -1.0}}}
     with pa_weights.use_weights(few):  # too few trades to trust

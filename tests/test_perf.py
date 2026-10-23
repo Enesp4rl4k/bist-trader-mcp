@@ -39,7 +39,7 @@ def test_rolling_bollinger_matches_reference(scale):
 def test_bollinger_flat_series_has_zero_width():
     bb = bollinger_bands([123.45] * 50)
     assert bb.upper[-1] == bb.lower[-1] == pytest.approx(123.45)
-    assert bb.bandwidth[-1] == 0.0
+    assert bb.bandwidth[-1] == pytest.approx(0.0)
     assert bollinger_bands([1.0, 2.0]).upper == [None, None]
 
 
@@ -103,7 +103,7 @@ def test_dashboard_refresh_does_not_stall_event_loop():
 
         async def tick():
             last = time.perf_counter()
-            while not done.is_set():
+            while not done.is_set():  # NOSONAR - samples loop latency on purpose
                 await asyncio.sleep(0.005)
                 now = time.perf_counter()
                 gaps.append(now - last)

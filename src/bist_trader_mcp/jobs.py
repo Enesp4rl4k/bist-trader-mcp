@@ -81,6 +81,7 @@ async def start_job(kind: str, args: dict[str, Any] | None = None) -> dict[str, 
                   "started_at": time.time(), "finished_at": None, "seconds": None,
                   "result": None, "error": None}
     _tasks[jid] = asyncio.get_running_loop().create_task(_run(jid, kinds[kind], args or {}))
+    await asyncio.sleep(0)  # let the job start before we report it queued
     return {"job_id": jid, "status": "queued",
             "summary_tr": f"İş başlatıldı ({kind}). Durum için get_job(job_id='{jid}')."}
 

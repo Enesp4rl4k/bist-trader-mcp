@@ -92,7 +92,7 @@ def test_risk_config_writes_are_atomic(tmp_path, monkeypatch):
     risk_engine.save_config({"equity": 50_000})
     risk_engine.save_config({"risk_per_trade_pct": 0.5})
     cfg = json.loads(Path(tmp_path / "r.json").read_text())
-    assert cfg["equity"] == 50_000 and cfg["risk_per_trade_pct"] == 0.5
+    assert cfg["equity"] == 50_000 and cfg["risk_per_trade_pct"] == pytest.approx(0.5)
 
 
 # ---------------------------------------------------------------- validation
@@ -123,7 +123,7 @@ def test_timeframes_and_prices():
     for bad in ("0", "1Y", "15m;x", ""):
         with pytest.raises(ValueError):
             validate_timeframe(bad)
-    assert validate_price("12.5") == 12.5
+    assert validate_price("12.5") == pytest.approx(12.5)
     for bad in (0, -1, float("nan"), float("inf"), "abc", None):
         with pytest.raises(ValueError):
             validate_price(bad)

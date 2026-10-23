@@ -47,7 +47,7 @@ PLAN = {"direction": "long", "entry": 100.0, "stop": 95.0, "target": 115.0}
 def test_position_size_respects_risk_and_lot():
     cfg = RiskConfig(equity=100_000, risk_per_trade_pct=1.0, lot_size=10)
     s = position_size(100.0, 95.0, cfg)
-    assert s["quantity"] == 200 and s["risk_amount"] == 1000.0 and s["risk_pct"] == 1.0
+    assert s["quantity"] == 200 and s["risk_amount"] == pytest.approx(1000.0) and s["risk_pct"] == pytest.approx(1.0)
     tight = position_size(100.0, 99.99, cfg)  # would need 100k shares → capped by equity
     assert tight["notional"] <= cfg.equity
 
@@ -134,6 +134,6 @@ def test_config_roundtrip_and_validation(tmp_path, monkeypatch):
     monkeypatch.setenv("BIST_RISK_CONFIG", str(tmp_path / "r.json"))
     assert re_.load_config() == RiskConfig()
     cfg = re_.save_config({"equity": 250_000, "risk_per_trade_pct": 0.5})
-    assert re_.load_config().equity == 250_000 and cfg.risk_per_trade_pct == 0.5
+    assert re_.load_config().equity == 250_000 and cfg.risk_per_trade_pct == pytest.approx(0.5)
     with pytest.raises(ValueError):
         re_.save_config({"risk_per_trade_pct": 50})

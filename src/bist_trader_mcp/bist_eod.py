@@ -14,6 +14,7 @@ Design notes:
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -168,7 +169,7 @@ def _safe_float(v: Any) -> float | None:
         f = float(v)
     except (TypeError, ValueError):
         return None
-    return None if f != f else f  # NaN guard
+    return None if math.isnan(f) else f
 
 
 def _coerce(value: date | str) -> date:

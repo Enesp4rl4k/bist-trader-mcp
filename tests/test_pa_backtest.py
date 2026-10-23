@@ -138,7 +138,7 @@ def test_resolve_bars_falls_back_when_tv_down(monkeypatch):
     monkeypatch.setattr(tvt, "tv_fetch_ohlcv", lambda *a, **k: {
         "success": False, "error": "tv_unavailable", "detail": "no node"})
 
-    async def public(*a, **k):
+    async def public(*a, **k):  # NOSONAR - test double for an async API
         return _fake_bars()
 
     monkeypatch.setattr(tools, "_load_ohlcv_public", public)

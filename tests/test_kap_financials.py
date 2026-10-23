@@ -60,7 +60,7 @@ PERIODS = [(2024, 12), (2023, 12)]
 
 
 def _fetch(payload=PAYLOAD, calls=None):
-    async def fetch(ticker, chunk, group):
+    async def fetch(ticker, chunk, group):  # NOSONAR - test double for an async API
         if calls is not None:
             calls.append((ticker, list(chunk), group))
         return payload
@@ -70,19 +70,19 @@ def _fetch(payload=PAYLOAD, calls=None):
 def test_parse_maps_line_items_and_derives():
     st = kf.parse_mali_tablo(PAYLOAD, PERIODS)
     cur = st["2024-12-31"]
-    assert cur["revenue"] == 2000.0
-    assert cur["current_assets"] == 600.0  # not overwritten by "NON-CURRENT ASSETS"
-    assert cur["operating_income"] == 400.0  # "Other Operating Income" is not EBIT
-    assert cur["net_income"] == 200.0  # parent share, not the 225 consolidated
-    assert cur["total_equity"] == 800.0
-    assert cur["minority_interest"] == 50.0  # balance sheet line comes first
+    assert cur["revenue"] == pytest.approx(2000.0)
+    assert cur["current_assets"] == pytest.approx(600.0)  # not overwritten by "NON-CURRENT ASSETS"
+    assert cur["operating_income"] == pytest.approx(400.0)  # "Other Operating Income" is not EBIT
+    assert cur["net_income"] == pytest.approx(200.0)  # parent share, not the 225 consolidated
+    assert cur["total_equity"] == pytest.approx(800.0)
+    assert cur["minority_interest"] == pytest.approx(50.0)  # balance sheet line comes first
     assert cur["tax_expense"] == -75.0  # deferred tax line ignored
     assert (cur["short_term_debt"], cur["long_term_debt"], cur["total_debt"]) == (120, 200, 320)
-    assert cur["total_liabilities"] == 700.0
-    assert cur["ebitda"] == 490.0
-    assert cur["free_cash_flow"] == 200.0
-    assert cur["sga"] == 180.0
-    assert cur["shares_outstanding"] == 50.0  # 1 TL nominal → paid-in capital
+    assert cur["total_liabilities"] == pytest.approx(700.0)
+    assert cur["ebitda"] == pytest.approx(490.0)
+    assert cur["free_cash_flow"] == pytest.approx(200.0)
+    assert cur["sga"] == pytest.approx(180.0)
+    assert cur["shares_outstanding"] == pytest.approx(50.0)  # 1 TL nominal → paid-in capital
     assert "dividends_paid" not in st["2023-12-31"]  # None stays missing
 
 
@@ -155,11 +155,11 @@ def test_default_periods_only_include_filed_periods():
 def test_history_feeds_valuation_drivers():
     st = kf.parse_mali_tablo(PAYLOAD, PERIODS)
     d = derive_drivers(kf.history_from_statements(st))
-    assert d["available"] and d["revenue0"] == 2000.0
+    assert d["available"] and d["revenue0"] == pytest.approx(2000.0)
     assert d["revenue_cagr"] == pytest.approx(0.25)
     assert d["capex_pct_revenue"] == pytest.approx((150 / 2000 + 120 / 1600) / 2, abs=1e-4)
-    assert d["debt"] == 320.0 and d["cash"] == 100.0 and d["shares_outstanding"] == 50.0
-    assert d["tax_rate"] == 0.25
+    assert d["debt"] == pytest.approx(320.0) and d["cash"] == pytest.approx(100.0) and d["shares_outstanding"] == pytest.approx(50.0)
+    assert d["tax_rate"] == pytest.approx(0.25)
     assert d["roe"] == pytest.approx(0.25)
 
 
@@ -167,13 +167,13 @@ def test_value_company_prefers_kap_and_falls_back_to_yahoo(monkeypatch):
     from bist_trader_mcp import company_valuation as cv
     from bist_trader_mcp import fundamental_data as fd
 
-    async def kap_ok(symbol):
+    async def kap_ok(symbol):  # NOSONAR - test double for an async API
         return {"available": True, "revenue0": 1.0, "source": "kap"}
 
     async def kap_fail(symbol):
         raise RuntimeError("blocked")
 
-    async def yahoo(ticker, years=6):
+    async def yahoo(ticker, years=6):  # NOSONAR - test double for an async API
         return {"history": {"revenue": [("2024-12-31", 5.0)]}}
 
     monkeypatch.setattr(fd, "fetch_financial_history", yahoo)
@@ -181,7 +181,7 @@ def test_value_company_prefers_kap_and_falls_back_to_yahoo(monkeypatch):
     assert asyncio.run(cv._default_history("THYAO"))["source"] == "kap"
     monkeypatch.setattr(cv, "_kap_history", kap_fail)
     out = asyncio.run(cv._default_history("THYAO"))
-    assert out["source"] == "yahoo" and out["revenue0"] == 5.0
+    assert out["source"] == "yahoo" and out["revenue0"] == pytest.approx(5.0)
 
 
 def test_tool_returns_point_in_time_analysis(monkeypatch):
@@ -204,11 +204,11 @@ def test_dashboard_value_button(monkeypatch):
 
     calls = {}
 
-    async def fin(sym, *a, **k):
+    async def fin(sym, *a, **k):  # NOSONAR - test double for an async API
         return {"symbol": sym, "analysis": {"selection": {
             "score": 42.0, "grade": "B", "red_flags": ["earnings_manipulation"]}}}
 
-    async def val(sym, **kw):
+    async def val(sym, **kw):  # NOSONAR - test double for an async API
         calls["rf"] = kw.get("risk_free")
         return {"summary_tr": "THYAO: harmanlanmış değer 400"}
 
@@ -220,4 +220,4 @@ def test_dashboard_value_button(monkeypatch):
     assert "+42/100 (B)" in out["summary_tr"] and "BIST_RISK_FREE" in out["summary_tr"]
     monkeypatch.setenv("BIST_RISK_FREE", "0.3")
     out = asyncio.run(tools.dashboard_action("value", "THYAO"))
-    assert calls["rf"] == 0.3 and out["summary_tr"].startswith("THYAO: harmanlanmış değer")
+    assert calls["rf"] == pytest.approx(0.3) and out["summary_tr"].startswith("THYAO: harmanlanmış değer")

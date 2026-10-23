@@ -54,7 +54,7 @@ def test_pipeline_logs_then_tracks_outcomes(tmp_path, monkeypatch):
     seeds = {"AAA": 3, "BBB": 5, "CCC": 7, "DDD": 11}
     state = {"n": 450}
 
-    async def load(sym):
+    async def load(sym):  # NOSONAR - test double for an async API
         return _bars(seeds[sym], state["n"])
 
     async def run():
@@ -127,7 +127,7 @@ def test_pipeline_stops_logging_when_risk_budget_is_full(tmp_path, monkeypatch):
     journal = tmp_path / "journal.json"
     seeds = {"AAA": 3, "BBB": 5, "CCC": 7}
 
-    async def load(sym):
+    async def load(sym):  # NOSONAR - test double for an async API
         return _bars(seeds[sym], 450)
 
     async def run():

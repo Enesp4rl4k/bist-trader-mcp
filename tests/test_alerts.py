@@ -12,7 +12,7 @@ TOKEN = ":".join(["123456", "fake-bot-token-for-tests"])  # built, not a literal
 
 
 def _install(handler):
-    async def setup():
+    async def setup():  # NOSONAR - test double for an async API
         hu._shared_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
         hu._shared_client_loop = asyncio.get_running_loop()
     return setup
@@ -96,7 +96,7 @@ def test_check_alerts_tool(monkeypatch):
     trade_journal.log_trade_plan({"symbol": "THYAO", "direction": "long", "entry": 100,
                                   "stop": 90, "targets": [120]}, status="open")
 
-    async def quotes(pairs):
+    async def quotes(pairs):  # NOSONAR - test double for an async API
         return [{"symbol": a, "last": 91.0} for a, _ in pairs]
 
     async def no_kap(**kw):

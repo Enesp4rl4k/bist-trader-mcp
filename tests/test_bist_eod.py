@@ -34,7 +34,7 @@ def test_yahoo_parser_skips_incomplete_latest_bar():
     bars = _parse_yahoo_chart(payload, ticker="THYAO.IS")
 
     assert len(bars) == 1
-    assert bars[0].close == 10.5
+    assert bars[0].close == pytest.approx(10.5)
 
 
 def test_period_start_supports_common_yahoo_ranges():
@@ -78,10 +78,10 @@ def _split_payload():
 
 def test_yahoo_parser_adjusts_for_split():
     raw = _parse_yahoo_chart(_split_payload(), ticker="X.IS")
-    assert raw[0].close == 100.0  # default: official prices
+    assert raw[0].close == pytest.approx(100.0)  # default: official prices
 
     adj = _parse_yahoo_chart(_split_payload(), ticker="X.IS", adjusted=True)
-    assert adj[0].close == 50.0
-    assert adj[0].open == 50.0 and adj[0].high == 51.0 and adj[0].low == 49.0
-    assert adj[0].volume == 2000.0
-    assert adj[1].close == 50.0 and adj[1].open == 51.0
+    assert adj[0].close == pytest.approx(50.0)
+    assert adj[0].open == pytest.approx(50.0) and adj[0].high == pytest.approx(51.0) and adj[0].low == pytest.approx(49.0)
+    assert adj[0].volume == pytest.approx(2000.0)
+    assert adj[1].close == pytest.approx(50.0) and adj[1].open == pytest.approx(51.0)
