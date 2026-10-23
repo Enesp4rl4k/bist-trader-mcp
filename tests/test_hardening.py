@@ -1,6 +1,7 @@
 """Hardening: safe journal writes, input validation, jobs, timeouts, tool stats."""
 
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -22,8 +23,12 @@ for i in range(50):
 
 def test_two_processes_writing_the_journal_lose_nothing(tmp_path):
     path = tmp_path / "journal.json"
+    # the package may be importable only via pytest's pythonpath (no install)
+    src = str(Path(__file__).resolve().parents[1] / "src")
+    env = {**os.environ,
+           "PYTHONPATH": os.pathsep.join(filter(None, [src, os.environ.get("PYTHONPATH")]))}
     procs = [
-        subprocess.Popen([sys.executable, "-c", WRITER, str(path), tag])
+        subprocess.Popen([sys.executable, "-c", WRITER, str(path), tag], env=env)
         for tag in ("A", "B")
     ]
     assert all(p.wait(timeout=120) == 0 for p in procs)

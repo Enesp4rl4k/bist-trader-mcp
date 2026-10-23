@@ -445,10 +445,12 @@ cd bist-trader-mcp
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -e ".[dev]"
-pytest -q                              # 304 tests
+pytest -q                              # ~600 tests
 $env:TCMB_EVDS_API_KEY = "your-key"   # For EVDS-dependent tools
 python -m bist_trader_mcp              # stdio MCP server (for testing)
 ```
+
+CI installs from the hashed lock files (`requirements-ci.txt`, `requirements-e2e.txt`, wheels only) and imports the package from `src/`. Each file's header shows the `uv pip compile` command that regenerates it after a dependency change.
 
 For EVDS key (free registration): https://evds3.tcmb.gov.tr/
 
