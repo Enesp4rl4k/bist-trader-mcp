@@ -86,8 +86,8 @@ def detect_order_blocks(
     if atr_val and atr_val > 0:
         atr_threshold = atr_val
     else:
-        recent = list(zip(highs[-20:], lows[-20:]))
-        atr_threshold = (sum(h - l for h, l in recent) / len(recent)) if recent else 0.0
+        recent = list(zip(highs[-20:], lows[-20:], strict=False))
+        atr_threshold = (sum(h - lo for h, lo in recent) / len(recent)) if recent else 0.0
     if atr_threshold <= 0:
         atr_threshold = closes[-1] * 0.01
 

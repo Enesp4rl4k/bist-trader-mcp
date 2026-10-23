@@ -39,7 +39,7 @@ def build_impulse_rule_checklist(
     if not m:
         return []
 
-    w1, w2, w3, w4, w5 = m["w1"], m["w2"], m["w3"], m["w4"], m["w5"]
+    w1, w3, w5 = m["w1"], m["w3"], m["w5"]
     checks: list[dict[str, Any]] = []
 
     if bull:

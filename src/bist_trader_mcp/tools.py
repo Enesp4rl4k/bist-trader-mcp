@@ -7,10 +7,15 @@ them instead of receiving an opaque exception.
 
 from __future__ import annotations
 
+import asyncio
 import math
+import os
+import time
 from datetime import date, timedelta
+from pathlib import Path
 from typing import Any
 
+from ._cache import LRUDict
 from ._wip import wip_payload
 from .backtest import SIGNAL_GENERATORS, run_backtest
 from .bist_eod import fetch_eod_ohlcv
@@ -163,6 +168,12 @@ from .tv_tools import (
 )
 from .tv_tools import (
     tv_health_check as _tv_health_check,
+)
+from .validation import (
+    validate_direction,
+    validate_price,
+    validate_symbol,
+    validate_timeframe,
 )
 from .viop import fetch_daily_settlement, fetch_option_chain, fetch_term_structure
 from .vol_forecast import ewma_volatility, garch_forecast
@@ -3051,10 +3062,16 @@ def analyze_price_action(
     lows: list[float],
     swing_lookback: int = 5,
     sr_tolerance_pct: float = 0.003,
+    detail: bool = False,
 ) -> dict[str, Any]:
-    """Swing structure, S/R clusters, bias, and suggested long/short setups."""
+    """Swing structure, S/R clusters, bias, and suggested long/short setups.
+
+    ``detail=False`` drops panels that are duplicated elsewhere in the payload
+    (``imbalances`` == ``fvg``; structure_detail copies of events/leg/sweeps) and
+    the raw OB/breaker lists — roughly halves the tokens sent to the model.
+    """
     try:
-        return {
+        out = {
             "source": "bist-trader-mcp — price_action.analyze_price_action",
             **_analyze_price_action(
                 closes=closes or [],
@@ -3066,6 +3083,16 @@ def analyze_price_action(
         }
     except (TypeError, ValueError) as e:
         return {"error": "bad_input", "detail": str(e)}
+    if not detail:
+        for k in ("imbalances", "raw_obs", "raw_breakers"):
+            out.pop(k, None)
+        sd = out.get("structure_detail")
+        if isinstance(sd, dict):
+            out["structure_detail"] = {
+                k: v for k, v in sd.items()
+                if k not in ("structure_events", "swing_leg", "sweeps")
+            }
+    return out
 
 
 def analyze_range_imbalance(
@@ -3851,3 +3878,1043 @@ def apply_trade_to_chart(
         }
     except Exception as e:
         return {"error": "tv_bridge_failed", "detail": str(e)}
+
+
+# --- Simple views: candle forecast + plain price action -------------------
+
+
+_BINANCE_INTERVALS = {
+    "1": "1m", "5": "5m", "15": "15m", "30": "30m", "60": "1h", "120": "2h",
+    "240": "4h", "1D": "1d", "D": "1d", "1W": "1w", "W": "1w",
+}
+
+
+async def _load_ohlcv_public(
+    symbol: str, timeframe: str = "1D", limit: int = 400
+) -> dict[str, list[float]]:
+    """Fallback OHLCV when TradingView is not reachable.
+
+    Binance for crypto pairs (any timeframe), Yahoo split-adjusted daily for BIST.
+    """
+    sym = symbol.strip().upper()
+    is_crypto = sym.startswith("BINANCE:") or sym.endswith(("USDT", "USDC", "BUSD", "BTC"))
+    tf = timeframe.strip().upper()
+    if is_crypto:
+        interval = _BINANCE_INTERVALS.get(tf, timeframe.lower())
+        klines = await fetch_binance_klines(
+            symbol=sym.split(":", 1)[-1], interval=interval, limit=limit
+        )
+        rows = [(k.open, k.high, k.low, k.close, k.volume, k.open_time_ms // 1000)
+                for k in klines]
+    else:
+        if tf not in ("1D", "D"):
+            raise ValueError(
+                f"public fallback only has daily BIST bars (asked {timeframe}); "
+                "open TradingView Desktop for intraday"
+            )
+        days = max(400, int(limit * 1.6))
+        since = (date.today() - timedelta(days=days)).isoformat()
+        bars = await fetch_eod_ohlcv(sym.split(":", 1)[-1], since=since, adjusted=True)
+        rows = [
+            (b.open, b.high, b.low, b.close, b.volume or 0.0, _date_to_unix(b.date))
+            for b in bars
+            if None not in (b.open, b.high, b.low, b.close)
+        ][-limit:]
+    return {
+        "opens": [float(r[0]) for r in rows],
+        "highs": [float(r[1]) for r in rows],
+        "lows": [float(r[2]) for r in rows],
+        "closes": [float(r[3]) for r in rows],
+        "volumes": [float(r[4]) for r in rows],
+        "times": [int(r[5]) for r in rows],
+    }
+
+
+def _date_to_unix(d: str) -> int:
+    from datetime import datetime, timezone
+
+    return int(datetime.fromisoformat(d).replace(tzinfo=timezone.utc).timestamp())
+
+
+async def _resolve_bars(
+    closes: list[float] | None,
+    highs: list[float] | None,
+    lows: list[float] | None,
+    opens: list[float] | None,
+    symbol: str | None,
+    timeframe: str,
+    limit: int,
+    data_source: str = "auto",
+) -> dict[str, Any]:
+    """Bars from the caller, else TradingView chart, else public fallback.
+
+    ``data_source``: "auto" (TradingView first, public if TV is unreachable),
+    "tradingview" (TV only) or "public" (Yahoo/Binance only).
+    """
+    if closes and highs and lows:
+        return {"closes": closes, "highs": highs, "lows": lows, "opens": opens,
+                "volumes": None, "data_source": "caller"}
+    if not symbol:
+        raise ValueError("pass closes/highs/lows or a symbol")
+    symbol = validate_symbol(symbol)
+    timeframe = validate_timeframe(timeframe)
+    if data_source not in ("auto", "tradingview", "public"):
+        raise ValueError(f"data_source must be auto, tradingview or public, got {data_source!r}")
+    key = (symbol, timeframe, data_source)
+    hit = _bars_cache_get(key, timeframe)
+    if hit is not None and len(hit["closes"]) >= min(limit, _TV_MAX_BARS):
+        return _slice_bars(hit, limit)
+    tv_error = None
+    if data_source in ("auto", "tradingview"):
+        from .tv_tools import tv_fetch_ohlcv
+
+        # Always pull the TV maximum: switching the chart is the slow part, and
+        # one full pull serves every later request for this symbol/timeframe.
+        tv = await asyncio.to_thread(tv_fetch_ohlcv, symbol, timeframe, _TV_MAX_BARS)
+        if tv.get("success"):
+            out = {**tv["bars"], "data_source": "tradingview", "symbol_tv": tv["symbol_tv"]}
+            _BARS_CACHE[key] = (time.monotonic(), out)
+            return _slice_bars(out, limit)
+        tv_error = f"{tv.get('error')}: {tv.get('detail')}"
+        if data_source == "tradingview":
+            raise ValueError(f"TradingView unavailable ({tv_error})")
+    bars = await _load_ohlcv_public(symbol, timeframe=timeframe, limit=max(limit, _TV_MAX_BARS))
+    out = {**bars, "data_source": "public"}
+    if tv_error:
+        out["tradingview_error"] = tv_error
+    _BARS_CACHE[key] = (time.monotonic(), out)
+    return _slice_bars(out, limit)
+
+
+_TV_MAX_BARS = 500
+# ~500 bars × 6 series per entry; 64 entries covers a BIST100 scan per timeframe pair.
+_BARS_CACHE: dict[tuple[str, str, str], tuple[float, dict[str, Any]]] = LRUDict(64)
+
+
+def _bars_ttl(timeframe: str) -> float:
+    from .tv_tools import timeframe_to_seconds
+
+    secs = timeframe_to_seconds(timeframe) or 86_400
+    if secs <= 900:
+        return 60.0
+    if secs < 86_400:
+        return 300.0
+    return 900.0
+
+
+def _bars_cache_get(key: tuple[str, str, str], timeframe: str) -> dict[str, Any] | None:
+    item = _BARS_CACHE.get(key)
+    if item is None:
+        return None
+    ts, bars = item
+    if time.monotonic() - ts > _bars_ttl(timeframe):
+        _BARS_CACHE.pop(key, None)
+        return None
+    return bars
+
+
+def _slice_bars(bars: dict[str, Any], limit: int) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for k, v in bars.items():
+        out[k] = v[-limit:] if isinstance(v, list) and limit > 0 else v
+    return out
+
+
+def _forecast_output_dir() -> Path:
+    override = os.environ.get("BIST_FORECAST_DIR")
+    if override:
+        return Path(override)
+    from .data_store import default_db_path
+
+    return default_db_path().parent / "forecasts"
+
+
+async def forecast_next_candles(
+    closes: list[float] | None = None,
+    highs: list[float] | None = None,
+    lows: list[float] | None = None,
+    opens: list[float] | None = None,
+    *,
+    symbol: str | None = None,
+    timeframe: str = "1D",
+    data_source: str = "auto",
+    horizon: int = 24,
+    n_paths: int = 30,
+    context: int = 360,
+    seed: int | None = None,
+    drift: str = "historical",
+    save_html: bool = True,
+    include_paths: bool = False,
+) -> dict[str, Any]:
+    """'N possible futures' candle forecast + optional HTML chart."""
+    from .candle_forecast import forecast_candles
+    from .forecast_chart import render_forecast_html
+
+    try:
+        bars = await _resolve_bars(
+            closes, highs, lows, opens, symbol, timeframe, max(context + 1, 120), data_source
+        )
+        fc = forecast_candles(
+            bars["closes"], bars["highs"], bars["lows"], bars.get("opens"),
+            horizon=int(horizon), n_paths=int(n_paths), context=int(context),
+            seed=seed, drift=drift, include_paths=include_paths,
+        )
+    except SourceError as e:
+        return {"error": "data_error", "detail": str(e)}
+    except (TypeError, ValueError) as e:
+        return {"error": "bad_input", "detail": str(e)}
+
+    out: dict[str, Any] = {
+        "source": "bist-trader-mcp — candle_forecast",
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "data_source": bars.get("data_source"),
+        **fc,
+    }
+    if bars.get("tradingview_error"):
+        out["tradingview_error"] = bars["tradingview_error"]
+    if save_html:
+        page = render_forecast_html(
+            fc, bars["closes"], bars["highs"], bars["lows"], bars.get("opens"),
+            symbol=symbol or "",
+        )
+        try:
+            folder = _forecast_output_dir()
+            folder.mkdir(parents=True, exist_ok=True)
+            safe = "".join(ch if ch.isalnum() else "_" for ch in (symbol or "series"))
+            path = folder / f"{safe}_{date.today().isoformat()}.html"
+            path.write_text(page, encoding="utf-8")
+            out["html_path"] = str(path)
+        except OSError as e:
+            out["html_error"] = str(e)
+    return out
+
+
+async def get_simple_price_action(
+    closes: list[float] | None = None,
+    highs: list[float] | None = None,
+    lows: list[float] | None = None,
+    opens: list[float] | None = None,
+    *,
+    symbol: str | None = None,
+    timeframe: str = "1D",
+    data_source: str = "auto",
+    min_rr: float = 1.5,
+) -> dict[str, Any]:
+    """Plain-language PA: trend, nearest S/R, last event, AL/SAT/BEKLE, one plan."""
+    from .pa_simple import simple_price_action
+
+    try:
+        bars = await _resolve_bars(
+            closes, highs, lows, opens, symbol, timeframe, 300, data_source
+        )
+        res = simple_price_action(
+            bars["closes"], bars["highs"], bars["lows"], bars.get("opens"),
+            volumes=bars.get("volumes"), min_rr=float(min_rr),
+        )
+    except SourceError as e:
+        return {"error": "data_error", "detail": str(e)}
+    except (TypeError, ValueError) as e:
+        return {"error": "bad_input", "detail": str(e)}
+    return {
+        "source": "bist-trader-mcp — pa_simple",
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "data_source": bars.get("data_source"),
+        **res,
+    }
+
+
+# --- Measurement: walk-forward PA backtest + forecast calibration ---------
+
+# Approximate BIST30 constituents (composition changes quarterly — pass your
+# own `symbols` list for an exact universe).
+BIST30_DEFAULT = [
+    "AKBNK", "ALARK", "ARCLK", "ASELS", "ASTOR", "BIMAS", "EKGYO", "ENKAI",
+    "EREGL", "FROTO", "GARAN", "GUBRF", "HEKTS", "ISCTR", "KCHOL", "KONTR",
+    "KOZAL", "KRDMD", "MGROS", "OYAKC", "PETKM", "PGSUS", "SAHOL", "SASA",
+    "SISE", "TCELL", "THYAO", "TOASO", "TUPRS", "YKBNK",
+]
+
+
+def _require_opens(bars: dict[str, Any]) -> list[float]:
+    opens = bars.get("opens")
+    if opens and len(opens) == len(bars["closes"]):
+        return opens
+    c = bars["closes"]
+    return [c[0]] + c[:-1]
+
+
+async def backtest_price_action(
+    closes: list[float] | None = None,
+    highs: list[float] | None = None,
+    lows: list[float] | None = None,
+    opens: list[float] | None = None,
+    *,
+    symbol: str | None = None,
+    timeframe: str = "1D",
+    data_source: str = "auto",
+    bars: int = 500,
+    max_hold: int = 20,
+    min_rr: float = 1.5,
+    cost_pct: float = 0.002,
+    include_trades: bool = False,
+) -> dict[str, Any]:
+    """Walk-forward test of get_simple_price_action verdicts + factor attribution."""
+    from .pa_backtest import backtest_simple_pa, pa_factor_attribution
+
+    try:
+        data = await _resolve_bars(
+            closes, highs, lows, opens, symbol, timeframe, int(bars), data_source
+        )
+        warmup = min(120, max(60, len(data["closes"]) // 4))
+        # CPU-bound: keep the event loop (other MCP calls, the panel) responsive.
+        bt = await asyncio.to_thread(
+            backtest_simple_pa,
+            _require_opens(data), data["highs"], data["lows"], data["closes"],
+            warmup=warmup, max_hold=int(max_hold), min_rr=float(min_rr),
+            cost_pct=float(cost_pct),
+        )
+    except SourceError as e:
+        return {"error": "data_error", "detail": str(e)}
+    except (TypeError, ValueError) as e:
+        return {"error": "bad_input", "detail": str(e)}
+    attribution = pa_factor_attribution(bt["trades"])
+    if not include_trades:
+        bt["recent_trades"] = bt.pop("trades")[-10:]
+    s = bt["stats"]
+    return {
+        "source": "bist-trader-mcp — pa_backtest",
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "data_source": data.get("data_source"),
+        **bt,
+        "factor_attribution": attribution,
+        "summary_tr": (
+            f"{s['trades']} işlem, isabet %{s['win_rate_pct']}, beklenti "
+            f"{s['expectancy_r']}R/işlem, toplam {s['total_r']}R, en kötü düşüş "
+            f"{s['max_drawdown_r']}R. {s['verdict_tr']} "
+            f"{attribution['confluence_score_check']['summary_tr']}"
+        ),
+    }
+
+
+async def backtest_price_action_universe(
+    symbols: list[str] | None = None,
+    *,
+    timeframe: str = "1D",
+    data_source: str = "auto",
+    bars: int = 500,
+    max_hold: int = 20,
+    min_rr: float = 1.5,
+    cost_pct: float = 0.002,
+    save_weights: bool = False,
+    train_frac: float = 2 / 3,
+    workers: int | None = None,
+) -> dict[str, Any]:
+    """Run backtest_price_action over many symbols and pool the trades.
+
+    Symbols are processed one by one (TradingView has a single chart).
+
+    ``save_weights=True`` learns factor weights + setup track records and saves
+    them for live analysis — but only marks them *active* if, fitted on the
+    first ``train_frac`` of every symbol's history, they did not make the
+    remaining out-of-sample part worse than the unweighted engine.
+    """
+    from .pa_backtest import (
+        group_trades,
+        pa_factor_attribution,
+        run_backtests,
+        summarize_trades,
+    )
+
+    symbols = [s.strip().upper() for s in (symbols or BIST30_DEFAULT) if s.strip()]
+    per_symbol = []
+    pooled: list[dict[str, Any]] = []
+    failed = []
+    sources: set[str] = set()
+    datasets: dict[str, tuple[list[float], ...]] = {}
+    splits: dict[str, int] = {}
+    jobs: dict[str, dict[str, Any]] = {}
+    # 1) fetch sequentially — TradingView has one chart
+    for sym in symbols:
+        try:
+            data = await _resolve_bars(
+                None, None, None, None, sym, timeframe, int(bars), data_source
+            )
+        except (SourceError, TypeError, ValueError) as e:
+            failed.append({"symbol": sym, "detail": str(e)})
+            continue
+        warmup = min(120, max(60, len(data["closes"]) // 4))
+        n_bars = len(data["closes"])
+        splits[sym] = warmup + int((n_bars - warmup) * float(train_frac))
+        datasets[sym] = (_require_opens(data), data["highs"], data["lows"], data["closes"])
+        sources.add(str(data.get("data_source")))
+        jobs[sym] = {
+            "opens": datasets[sym][0], "highs": data["highs"], "lows": data["lows"],
+            "closes": data["closes"], "warmup": warmup, "max_hold": int(max_hold),
+            "min_rr": float(min_rr), "cost_pct": float(cost_pct),
+        }
+    # 2) compute in parallel processes, off the event loop
+    results = await asyncio.to_thread(run_backtests, list(jobs.values()), workers)
+    for sym, bt in zip(jobs, results, strict=True):
+        if isinstance(bt, BaseException):
+            failed.append({"symbol": sym, "detail": f"{type(bt).__name__}: {bt}"})
+            datasets.pop(sym, None)
+            continue
+        for tr in bt["trades"]:
+            pooled.append({**tr, "symbol": sym, "oos": tr["signal_bar"] >= splits[sym]})
+        s = bt["stats"]
+        per_symbol.append(
+            {
+                "symbol": sym,
+                "trades": s["trades"],
+                "win_rate_pct": s["win_rate_pct"],
+                "expectancy_r": s["expectancy_r"],
+                "total_r": s["total_r"],
+            }
+        )
+    per_symbol.sort(key=lambda r: -(r["total_r"] or 0))
+
+    stats = summarize_trades(pooled)
+    attribution = pa_factor_attribution(pooled)
+    weights_report = None
+    if save_weights and pooled:
+        weights_report = await asyncio.to_thread(
+            _learn_and_save_weights,
+            pooled, datasets, splits,
+            meta={
+                "symbols": sorted(datasets), "timeframe": timeframe,
+                "trades": len(pooled), "max_hold": max_hold, "min_rr": min_rr,
+                "cost_pct": cost_pct,
+            },
+            max_hold=int(max_hold), min_rr=float(min_rr), cost_pct=float(cost_pct),
+            workers=workers,
+        )
+    return {
+        "source": "bist-trader-mcp — pa_backtest (universe)",
+        "weights": weights_report,
+        "timeframe": timeframe,
+        "data_sources": sorted(sources),
+        "symbols_tested": len(per_symbol),
+        "symbols_failed": failed,
+        "pooled_stats": stats,
+        "by_direction": group_trades(pooled, "direction"),
+        "by_trend": group_trades(pooled, "trend"),
+        "by_setup_type": group_trades(pooled, "setup_type"),
+        "per_symbol": per_symbol,
+        "factor_attribution": attribution,
+        "summary_tr": (
+            f"{len(per_symbol)} sembol, toplam {stats['trades']} işlem: isabet "
+            f"%{stats['win_rate_pct']}, beklenti {stats['expectancy_r']}R/işlem. "
+            f"{stats['verdict_tr']} Tut: {', '.join(attribution['keep']) or '-'}. "
+            f"At: {', '.join(attribution['drop']) or '-'}. "
+            f"{attribution['confluence_score_check']['summary_tr']}"
+        ),
+    }
+
+
+def _learn_and_save_weights(
+    pooled: list[dict[str, Any]],
+    datasets: dict[str, tuple[list[float], ...]],
+    splits: dict[str, int],
+    *,
+    meta: dict[str, Any],
+    max_hold: int,
+    min_rr: float,
+    cost_pct: float,
+    workers: int | None = None,
+) -> dict[str, Any]:
+    """Fit on in-sample trades, validate out-of-sample, refit on all, save."""
+    from .pa_backtest import pa_factor_attribution, run_backtests, summarize_trades
+    from .pa_weights import build_weights, save_weights, weights_path
+
+    train = [t for t in pooled if not t["oos"]]
+    test_base = [t for t in pooled if t["oos"]]
+    # Stricter than the report (20 vs 10 trades per side) — weights change
+    # live verdicts, so a factor needs a real sample before it is silenced.
+    candidate = build_weights(pa_factor_attribution(train, min_samples=20), train)
+    oos_jobs = [
+        {"opens": o, "highs": h, "lows": lo, "closes": c, "warmup": splits[sym],
+         "max_hold": max_hold, "min_rr": min_rr, "cost_pct": cost_pct, "weights": candidate}
+        for sym, (o, h, lo, c) in datasets.items() if splits[sym] < len(c) - 10
+    ]
+    test_weighted: list[dict[str, Any]] = []
+    for bt in run_backtests(oos_jobs, workers):
+        if not isinstance(bt, BaseException):
+            test_weighted.extend(bt["trades"])
+    base_s = summarize_trades(test_base, min_trades=10)
+    w_s = summarize_trades(test_weighted, min_trades=10)
+    base_e = base_s["expectancy_r"]
+    w_e = w_s["expectancy_r"]
+    if w_e is None:
+        active, why = False, "Örneklem dışında ağırlıklı sistem hiç işlem üretmedi."
+    elif base_e is None:
+        active, why = w_e > 0, "Ağırlıksız sistem örneklem dışında işlem üretmedi."
+    else:
+        active = w_e >= base_e
+        why = (
+            f"Örneklem dışı: ağırlıksız {base_e:+.2f}R/işlem ({base_s['trades']} işlem) → "
+            f"ağırlıklı {w_e:+.2f}R/işlem ({w_s['trades']} işlem)."
+        )
+    # refit on all data
+    final = build_weights(pa_factor_attribution(pooled, min_samples=20), pooled, meta=meta)
+    final["active"] = bool(active)
+    final["validation"] = {
+        "train_trades": len(train),
+        "oos_baseline": {k: base_s[k] for k in ("trades", "win_rate_pct", "expectancy_r")},
+        "oos_weighted": {k: w_s[k] for k in ("trades", "win_rate_pct", "expectancy_r")},
+        "summary_tr": why,
+    }
+    path = save_weights(final)
+    return {
+        "path": str(path or weights_path()),
+        "active": final["active"],
+        "factor_weights": final["factor_weights"],
+        "validation": final["validation"],
+        "summary_tr": why + (
+            " Ağırlıklar kaydedildi ve canlı analizde kullanılacak."
+            if active else " Ağırlıklar kaydedildi ama iyileştirme olmadığı için pasif."
+        ),
+    }
+
+
+async def evaluate_forecast_accuracy(
+    closes: list[float] | None = None,
+    highs: list[float] | None = None,
+    lows: list[float] | None = None,
+    opens: list[float] | None = None,
+    *,
+    symbol: str | None = None,
+    timeframe: str = "1D",
+    data_source: str = "auto",
+    bars: int = 500,
+    horizon: int = 24,
+    n_paths: int = 30,
+    step: int = 10,
+) -> dict[str, Any]:
+    """Walk-forward calibration of forecast_next_candles (band coverage, direction)."""
+    from .forecast_eval import evaluate_forecast_calibration
+
+    try:
+        data = await _resolve_bars(
+            closes, highs, lows, opens, symbol, timeframe, int(bars), data_source
+        )
+        warmup = min(120, max(40, len(data["closes"]) // 4))
+        res = await asyncio.to_thread(
+            evaluate_forecast_calibration,
+            _require_opens(data), data["highs"], data["lows"], data["closes"],
+            horizon=int(horizon), n_paths=int(n_paths), step=int(step), warmup=warmup,
+        )
+    except SourceError as e:
+        return {"error": "data_error", "detail": str(e)}
+    except (TypeError, ValueError) as e:
+        return {"error": "bad_input", "detail": str(e)}
+    return {
+        "source": "bist-trader-mcp — forecast_eval",
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "data_source": data.get("data_source"),
+        **res,
+    }
+
+
+def get_network_stats(prune_cache: bool = False) -> dict[str, Any]:
+    """HTTP counters, per-tool latency/errors, disk cache, in-memory bar cache."""
+    from ._cache import cache_prune, cache_stats
+    from .http_utils import network_stats
+    from .telemetry import tool_stats
+
+    out: dict[str, Any] = {
+        "source": "bist-trader-mcp — network stats",
+        "http": network_stats(),
+        "tools": tool_stats(),
+        "disk_cache": cache_stats(),
+        "bar_cache": [
+            {"symbol": k[0], "timeframe": k[1], "data_source": v[1].get("data_source"),
+             "bars": len(v[1].get("closes") or []),
+             "age_sec": round(time.monotonic() - v[0])}
+            for k, v in _BARS_CACHE.items()
+        ],
+    }
+    if prune_cache:
+        out["pruned"] = cache_prune()
+        out["disk_cache_after"] = cache_stats()
+    return out
+
+
+async def run_daily_pipeline(
+    symbols: list[str] | None = None,
+    *,
+    timeframe: str = "1D",
+    top_n: int = 5,
+    data_source: str = "auto",
+    min_rr: float = 1.5,
+    max_hold: int = 20,
+    cost_pct: float = 0.002,
+    log_to_journal: bool = True,
+    store_prices: bool = True,
+    save_html: bool = True,
+) -> dict[str, Any]:
+    """Scan → rank → journal → track outcomes → HTML dashboard (see daily_pipeline)."""
+    from .daily_pipeline import run_pipeline
+
+    syms = [s.strip().upper() for s in (symbols or BIST30_DEFAULT) if s.strip()]
+
+    async def load(sym: str) -> dict[str, Any]:
+        return await _resolve_bars(None, None, None, None, sym, timeframe, 300, data_source)
+
+    try:
+        res = await run_pipeline(
+            syms, load, timeframe=timeframe, top_n=int(top_n), min_rr=float(min_rr),
+            max_hold=int(max_hold), cost_pct=float(cost_pct),
+            log_to_journal=bool(log_to_journal), store_prices=bool(store_prices),
+            html_dir=_forecast_output_dir() if save_html else None,
+        )
+    except (TypeError, ValueError, OSError) as e:
+        return {"error": "pipeline_failed", "detail": str(e)}
+    return {"source": "bist-trader-mcp — daily_pipeline", **res}
+
+
+# --- Company valuation --------------------------------------------------------
+
+
+async def value_company(symbol: str | None = None, **kwargs: Any) -> dict[str, Any]:
+    """Full company valuation (see company_valuation.value_company)."""
+    from .company_valuation import value_company as _value
+
+    try:
+        sym = validate_symbol(symbol) if symbol else None
+        for p in kwargs.get("peers") or []:
+            if isinstance(p, str):
+                validate_symbol(p)
+        res = await _value(sym, **{k: v for k, v in kwargs.items() if v is not None})
+    except SourceError as e:
+        return {"error": "data_error", "detail": str(e)}
+    except (TypeError, ValueError) as e:
+        return {"error": "bad_input", "detail": str(e)}
+    return {"source": "bist-trader-mcp — company valuation", **res}
+
+
+async def get_kap_financials(
+    symbol: str,
+    as_of: str | None = None,
+    years: int = 5,
+    refresh: bool = True,
+    analyze: bool = True,
+) -> dict[str, Any]:
+    """KAP statements → PanelStore (point-in-time) → annual figures as of a date."""
+    from . import kap_financials as kf
+    from .data_store import PanelStore
+
+    try:
+        sym = validate_symbol(symbol).split(":")[-1]
+        if as_of:
+            date.fromisoformat(as_of[:10])
+        years = max(1, min(int(years), 10))
+        with PanelStore() as store:
+            ingest = None
+            if refresh:
+                ingest = await kf.ingest(sym, store, periods=kf.default_periods(years=years))
+            st = kf.statements_as_of(store, sym, as_of)
+            cur, prior = kf.financial_periods_as_of(store, sym, as_of)
+    except SourceError as e:
+        return {"error": "data_error", "detail": str(e),
+                "hint": "Kaynak erişilemedi; analyze_financial_statements'a kalemleri elle ver."}
+    except (TypeError, ValueError) as e:
+        return {"error": "bad_input", "detail": str(e)}
+    if not st:
+        return {"error": "no_data", "detail": f"{sym} için {as_of or 'bugün'} itibarıyla "
+                "yayımlanmış yıllık tablo yok.", "ingest": ingest}
+    out: dict[str, Any] = {
+        "source": "KAP (İş Yatırım MaliTablo) → PanelStore",
+        "symbol": sym, "as_of": as_of or date.today().isoformat(),
+        "ingest": ingest, "annual": st,
+        "point_in_time": "Satırlar KAP yayın tarihinde (yoksa yasal son gün) bilinir sayılır.",
+    }
+    if analyze and cur:
+        note = cur.pop("_note", None)
+        out["analysis"] = _analyze_financials(cur, prior, ticker=sym)
+        if note:
+            out["note"] = note
+    return out
+
+
+async def estimate_equity_beta(symbol: str, index: str = "XU100",
+                               blume: bool = True) -> dict[str, Any]:
+    """Beta of a stock vs an index from ~2 years of daily prices (public data)."""
+    from .valuation_pro import estimate_beta
+
+    try:
+        sym, idx = validate_symbol(symbol), validate_symbol(index)
+        s = await _resolve_bars(None, None, None, None, sym, "1D", 500, "public")
+        m = await _resolve_bars(None, None, None, None, idx, "1D", 500, "public")
+        res = estimate_beta(s["closes"], m["closes"], blume=blume)
+    except SourceError as e:
+        return {"error": "data_error", "detail": str(e)}
+    except (TypeError, ValueError) as e:
+        return {"error": "bad_input", "detail": str(e)}
+    return {"source": "bist-trader-mcp — beta", "symbol": sym, "index": idx, **res,
+            "summary_tr": f"{sym} beta {res['beta']} (ham {res['raw_beta']}, R² "
+                          f"{res['r_squared']}, {res['observations']} gözlem, {idx}'e göre)."}
+
+
+# --- Company events ---------------------------------------------------------
+
+
+async def _company_info(symbols: list[str], days: int = 100) -> dict[str, Any]:
+    """Earnings window + KAP corporate actions; KAP is optional (browser extra)."""
+    from dataclasses import asdict
+
+    from .company_events import company_events
+
+    disclosures = None
+    try:
+        ds = await asyncio.wait_for(
+            fetch_disclosures(since=date.today() - timedelta(days=days), limit=500), 20
+        )
+        disclosures = [asdict(d) for d in ds]
+    except Exception:  # noqa: BLE001 — fall back to the filing calendar only
+        disclosures = None
+    out = company_events(symbols, disclosures)
+    for v in out.values():
+        v["kap_available"] = disclosures is not None
+    return out
+
+
+async def get_company_events(symbols: list[str] | None = None) -> dict[str, Any]:
+    """Per symbol: earnings window (SPK deadlines, KAP-aware) + recent corporate actions."""
+    from .company_events import filing_periods
+    from .daily_pipeline import tracked_symbols
+
+    try:
+        syms = [validate_symbol(s) for s in (symbols or tracked_symbols() or BIST30_DEFAULT[:10])]
+    except ValueError as e:
+        return {"error": "bad_input", "detail": str(e)}
+    info = await _company_info(syms)
+    flagged = {s: v["flags"] for s, v in info.items() if v["flags"]}
+    periods = [{k: (v.isoformat() if hasattr(v, "isoformat") else v) for k, v in p.items()}
+               for p in filing_periods(date.today())]
+    kap = next(iter(info.values()), {}).get("kap_available")
+    return {
+        "source": "bist-trader-mcp — company events",
+        "filing_periods": periods,
+        "kap_available": kap,
+        "companies": info,
+        "summary_tr": (
+            f"{len(syms)} şirket; {len(flagged)} tanesinde uyarı var"
+            + (": " + "; ".join(f"{s}: {', '.join(f)}" for s, f in list(flagged.items())[:5])
+               if flagged else ".")
+            + ("" if kap else " (KAP okunamadı — sadece yasal son tarihler kullanıldı.)")
+        ),
+    }
+
+
+# --- Paper account ----------------------------------------------------------
+
+
+async def get_paper_account(data_source: str = "public") -> dict[str, Any]:
+    """TL paper account of every pipeline / dashboard plan + live-vs-backtest check."""
+    from .daily_pipeline import tracked_symbols
+    from .paper import paper_account
+
+    bars = await _risk_bars(tracked_symbols(), data_source)
+    return {"source": "bist-trader-mcp — paper account", **paper_account(bars_by_symbol=bars)}
+
+
+# --- Alerts -----------------------------------------------------------------
+
+
+async def check_alerts(send: bool = True, near_stop_r: float = 0.3) -> dict[str, Any]:
+    """Intraday check: open trades near their stop + material KAP news for held symbols.
+
+    Lifecycle alerts (filled / stop / target) come from run_daily_pipeline.
+    Run this every 15–30 min via ``bist-trader-alerts`` in Task Scheduler / cron.
+    """
+    from .alerts import deliver, kap_alerts, near_stop_alerts
+    from .bist_snapshot import _to_yahoo
+    from .dashboard_data import _quotes
+    from .risk_engine import _journal_rows
+
+    rows = [r for r in _journal_rows(None) if r.get("status") in ("open", "planned")]
+    symbols = sorted({str(r.get("symbol") or "").upper() for r in rows} - {""})
+    found: list[dict[str, Any]] = []
+    notes: list[str] = []
+    if symbols:
+        quotes = await _quotes([(s, _to_yahoo(s)) for s in symbols])
+        prices = {q["symbol"]: float(q["last"]) for q in quotes if q.get("last")}
+        found += near_stop_alerts([r for r in rows if r.get("status") == "open"], prices,
+                                  near_stop_r)
+        try:
+            from dataclasses import asdict
+
+            ds = await fetch_disclosures(since=date.today() - timedelta(days=1), limit=100)
+            found += kap_alerts([asdict(d) for d in ds], set(symbols))
+        except Exception as e:  # noqa: BLE001 — KAP needs the browser extra
+            notes.append(f"KAP okunamadı: {type(e).__name__}")
+    res = await deliver(found, send=send)
+    return {
+        "source": "bist-trader-mcp — alerts",
+        "watched_symbols": symbols,
+        **{k: res.get(k) for k in ("new", "sent", "telegram", "errors", "alerts")},
+        "notes": notes,
+        "summary_tr": (f"{len(symbols)} sembol izlendi, {res['new']} yeni uyarı"
+                       + (f", {res['sent']} Telegram'a gitti." if res["telegram"]
+                          else " (Telegram ayarlı değil; uyarılar yerel dosyada).")),
+    }
+
+
+async def send_test_alert() -> dict[str, Any]:
+    """Send one test message to check the Telegram setup."""
+    from .alerts import _send_telegram, outbox_path, telegram_configured
+
+    if not telegram_configured():
+        return {"ok": False, "summary_tr": "BIST_TELEGRAM_BOT_TOKEN ve BIST_TELEGRAM_CHAT_ID "
+                "ortam değişkenleri ayarlı değil.", "outbox": str(outbox_path())}
+    ok, err = await _send_telegram("BIST Trader — test mesajı ✅")
+    return {"ok": ok, "error": err, "summary_tr": "Test mesajı gönderildi." if ok
+            else f"Gönderilemedi: {err}"}
+
+
+def get_alerts(limit: int = 50) -> dict[str, Any]:
+    from .alerts import outbox_path, recent_alerts, telegram_configured
+
+    return {"source": "bist-trader-mcp — alerts", "outbox": str(outbox_path()),
+            "telegram": telegram_configured(), "alerts": recent_alerts(int(limit))}
+
+
+def alerts_cli() -> None:
+    """``bist-trader-alerts``: one intraday alert check (for Task Scheduler / cron)."""
+    res = asyncio.run(check_alerts())
+    print(res["summary_tr"])
+
+
+# --- Risk engine ------------------------------------------------------------
+
+
+async def _risk_bars(symbols: list[str], data_source: str = "public") -> dict[str, Any]:
+    """Daily bars for risk maths. Defaults to public data so checking risk never
+    flips the user's TradingView chart through every open position."""
+    out: dict[str, Any] = {}
+    for sym in dict.fromkeys(s.strip().upper() for s in symbols if s):
+        try:
+            out[sym] = await _resolve_bars(None, None, None, None, sym, "1D", 120, data_source)
+        except (SourceError, TypeError, ValueError):
+            continue
+    return out
+
+
+def _open_symbols() -> list[str]:
+    from .risk_engine import _journal_rows
+
+    return [str(r.get("symbol")) for r in _journal_rows(None)
+            if r.get("status") in ("open", "planned") and r.get("symbol")]
+
+
+def get_risk_config() -> dict[str, Any]:
+    from dataclasses import asdict
+
+    from .risk_engine import config_path, load_config
+
+    return {"source": "bist-trader-mcp — risk_engine", "path": str(config_path()),
+            **asdict(load_config())}
+
+
+def set_risk_config(**updates: Any) -> dict[str, Any]:
+    from dataclasses import asdict
+
+    from .risk_engine import config_path, save_config
+
+    try:
+        cfg = save_config({k: v for k, v in updates.items() if v is not None})
+    except (TypeError, ValueError) as e:
+        return {"error": "bad_input", "detail": str(e)}
+    return {"source": "bist-trader-mcp — risk_engine", "path": str(config_path()),
+            "saved": True, **asdict(cfg)}
+
+
+async def check_trade_risk(
+    symbol: str,
+    direction: str,
+    entry: float,
+    stop: float,
+    target: float | None = None,
+    *,
+    data_source: str = "public",
+) -> dict[str, Any]:
+    """Size a trade and run all portfolio checks (see risk_engine.check_trade)."""
+    from .risk_engine import check_trade
+
+    try:
+        symbol = validate_symbol(symbol)
+        plan = {
+            "direction": validate_direction(direction),
+            "entry": validate_price(entry, "entry"),
+            "stop": validate_price(stop, "stop"),
+            "target": None if target is None else validate_price(target, "target"),
+        }
+        bars = await _risk_bars([symbol, *_open_symbols()], data_source)
+        company = (await _company_info([symbol])).get(symbol)
+        res = check_trade(plan, symbol=symbol, bars_by_symbol=bars, company=company)
+    except (KeyError, TypeError, ValueError) as e:
+        return {"error": "bad_input", "detail": str(e)}
+    return {"source": "bist-trader-mcp — risk_engine.check_trade", **res}
+
+
+async def get_portfolio_risk(data_source: str = "public") -> dict[str, Any]:
+    """Heat, open positions, realised P&L, circuit breaker, clusters, VaR."""
+    from .risk_engine import portfolio_risk
+
+    bars = await _risk_bars(_open_symbols(), data_source)
+    return {"source": "bist-trader-mcp — risk_engine.portfolio_risk",
+            **portfolio_risk(bars_by_symbol=bars)}
+
+
+# --- Live dashboard (MCP Apps + local web) --------------------------------
+
+DASHBOARD_URI = "ui://bist-trader/dashboard.html"
+
+
+async def dashboard_snapshot(state: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Data for every enabled panel section (called by the dashboard on refresh)."""
+    from .dashboard_data import build_snapshot
+
+    return await build_snapshot(state)
+
+
+async def open_dashboard(
+    symbol: str | None = None,
+    timeframe: str | None = None,
+    watchlist: list[str] | None = None,
+    start_web: bool = True,
+) -> dict[str, Any]:
+    """Open the live panel; also starts the local browser version."""
+    from .dashboard_data import build_snapshot, snapshot_text
+
+    state: dict[str, Any] = {}
+    if symbol:
+        state["symbol"] = symbol
+    if timeframe:
+        state["timeframe"] = timeframe
+    if watchlist:
+        state["watchlist"] = watchlist
+    snap = await build_snapshot(state)
+    url = None
+    if start_web:
+        from . import dashboard_web
+
+        try:
+            url = dashboard_web.start(asyncio.get_running_loop(), dashboard_dispatch)
+        except OSError as e:
+            snap["web_error"] = str(e)
+    snap["local_url"] = url
+    snap["summary_tr"] = snapshot_text(snap) + (
+        f"\nTarayıcıda aç (Codex/terminal için): {url}" if url else ""
+    )
+    return snap
+
+
+async def dashboard_action(
+    action: str,
+    symbol: str,
+    timeframe: str = "1D",
+    plan: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Buttons of the dashboard: tv_open, value, tv_draw_plan, risk_check, journal_add."""
+    try:
+        sym = validate_symbol(symbol)
+        timeframe = validate_timeframe(timeframe)
+    except ValueError as e:
+        return {"error": "bad_input", "detail": str(e)}
+    if action == "tv_open":
+        from .market_profiles import detect_asset_class, normalize_tv_symbol
+
+        sym_tv = normalize_tv_symbol(sym, detect_asset_class(sym))
+        a = await asyncio.to_thread(_tv_chart_set_symbol, sym_tv)
+        b = await asyncio.to_thread(_tv_chart_set_timeframe, timeframe)
+        ok = a.get("success", True) is not False and b.get("success", True) is not False
+        return {"ok": ok, "summary_tr": f"TradingView: {sym_tv} {timeframe} açıldı." if ok
+                else f"TradingView'a ulaşılamadı: {a.get('error') or b.get('error')}"}
+    if action == "value":
+        return await _dashboard_value(sym)
+    if not plan or plan.get("entry") is None or plan.get("stop") is None:
+        return {"error": "no_plan", "detail": "Bu işlem için aktif plan gerekli."}
+    direction = plan.get("direction") or "long"
+    target = plan.get("target") or (plan.get("targets") or [None])[0]
+    if action == "risk_check":
+        return await check_trade_risk(sym, direction, plan["entry"], plan["stop"], target)
+    if action == "tv_draw_plan":
+        tv_plan = {"symbol": sym, "direction": direction, "entry": plan["entry"],
+                   "stop": plan["stop"], "targets": [{"price": target}] if target else []}
+        res = await asyncio.to_thread(apply_trade_to_chart, tv_plan, sym, timeframe)
+        ok = not res.get("error") and res.get("success", True) is not False
+        return {"ok": ok, "summary_tr": "Plan TradingView'a çizildi." if ok
+                else f"Çizilemedi: {res.get('detail') or res.get('error')}", "detail": res}
+    if action == "journal_add":
+        risk = await check_trade_risk(sym, direction, plan["entry"], plan["stop"], target)
+        if risk.get("error") or not risk.get("approved"):
+            return {**risk, "approved": False,
+                    "summary_tr": "Günlüğe eklenmedi. " + risk.get("summary_tr", "")}
+        from .trade_journal import log_trade_plan
+
+        logged = log_trade_plan(
+            {"symbol": sym, "direction": direction, "entry": plan["entry"],
+             "stop": plan["stop"], "targets": [target] if target else [],
+             "best_risk_reward": plan.get("risk_reward"), "sizing": risk["sizing"],
+             "source": "dashboard", "timeframe": timeframe,
+             # replayed by the daily tracker from the next bar on, as a limit
+             # order at `entry` with the usual 3-bar fill window
+             "signal_time": int(time.time()), "market": False},
+            notes="dashboard",
+        )
+        return {**risk, "trade_id": logged["trade_id"],
+                "summary_tr": f"Günlüğe eklendi ({logged['trade_id']}). " + risk["summary_tr"]}
+    return {"error": "unknown_action", "detail": action}
+
+
+async def _dashboard_value(sym: str) -> dict[str, Any]:
+    """"Değerle" button: KAP quality check + valuation when a risk-free rate is set.
+
+    The risk-free rate is never guessed: it comes from ``BIST_RISK_FREE`` (decimal,
+    e.g. 0.30 for the TL 10Y DİBS); without it only the statement analysis runs.
+    """
+    ticker = sym.split(":")[-1]
+    fin = await get_kap_financials(ticker)
+    parts: list[str] = []
+    if fin.get("error"):
+        parts.append(f"KAP tabloları: {fin.get('detail') or fin['error']}")
+    else:
+        sel = (fin.get("analysis") or {}).get("selection") or {}
+        if sel.get("score") is not None:
+            parts.append(f"Finansal kalite {sel['score']:+.0f}/100 ({sel.get('grade', '?')})")
+        flags = sel.get("red_flags") or []
+        if flags:
+            parts.append("Uyarılar: " + "; ".join(map(str, flags[:3])))
+    out: dict[str, Any] = {"ok": not fin.get("error"), "financials": fin}
+    raw_rf = os.environ.get("BIST_RISK_FREE")
+    try:
+        rf = float(raw_rf) if raw_rf else None
+    except ValueError:
+        rf = None
+    if rf is None:
+        parts.append("Değerleme için BIST_RISK_FREE (ör. 0.30) ayarla ya da "
+                     "\"Claude'a sor\" ile risksiz faizi ver.")
+    else:
+        val = await value_company(ticker, risk_free=rf)
+        out["valuation"] = val
+        parts.insert(0, val.get("summary_tr") or val.get("detail") or "Değerleme yapılamadı.")
+        out["ok"] = out["ok"] or not val.get("error")
+    out["summary_tr"] = " · ".join(parts)
+    return out
+
+
+async def dashboard_dispatch(name: str, args: dict[str, Any]) -> Any:
+    """Entry point for the local web server (same tools the MCP host calls)."""
+    if name == "dashboard_snapshot":
+        return await dashboard_snapshot(args.get("state"))
+    if name == "dashboard_action":
+        return await dashboard_action(
+            str(args.get("action") or ""), str(args.get("symbol") or ""),
+            str(args.get("timeframe") or "1D"), args.get("plan"),
+        )
+    raise ValueError(f"not a dashboard tool: {name}")

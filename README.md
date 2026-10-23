@@ -2,13 +2,13 @@
 
 [![Verified on MseeP](https://mseep.ai/badge.svg)](https://mseep.ai/app/219ae973-af4d-490e-a059-e8ac4f20c7bf)
 
-[![pytest](https://img.shields.io/badge/pytest-304%20passed-success)](https://github.com/Enesp4rl4k/bist-trader-mcp)
+[![pytest](https://github.com/Enesp4rl4k/bist-trader-mcp/actions/workflows/pytest.yml/badge.svg)](https://github.com/Enesp4rl4k/bist-trader-mcp/actions/workflows/pytest.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 
 **Open-source MCP server** for Turkish markets **and** crypto: macro & market data, **fundamental research routing** (KAP, BIST, VIOP, EVDS, crypto), **rule-based technical analysis** (Price Action, range/FVG, Elliott MTF), and **TradingView Desktop** drawing via CDP (Long/Short position tool).
 
-> **Open beta (v0.4.0):** `run_market_assistant` + **fusion** layer merges live fundamentals with PA/EW gates before drawing a position.
+> **Open beta (v0.5.0):** `run_market_assistant` + **fusion** layer merges live fundamentals with PA/EW gates before drawing a position.
 
 > **Trade assistant, not a profit bot.** No broker execution. Not investment advice.
 
@@ -91,6 +91,138 @@ get_kap_disclosures(company="THYAO")            # fundamental layer (after check
 | `analyze_chart_scenarios` | Technical package only |
 | `design_scenario_trade_plan` | Plan + playbook (requires OHLCV) |
 | `get_market_profile` | HTF/LTF and thresholds |
+
+### Guided workflows (MCP prompts)
+
+Pick these from your AI app's prompt list (`/` menu in Claude / Cursor); the model then calls the right tools in order and reports in Turkish, citing data sources and never inventing numbers:
+
+| Prompt | What it does |
+|---|---|
+| `hisse-analizi` | One stock end to end: simple PA, 30 futures, company events, valuation, KAP, risk check |
+| `sabah-brifingi` | Morning: market strip, open risk, paper account, alerts, today's events, news |
+| `aksam-rutini` | After the close: daily pipeline as a background job, picks with lot sizes, paper account |
+| `sirket-degerleme` | Valuation with assumption review, sensitivity, scenarios, Monte Carlo, peers |
+| `strateji-dogrulama` | Real-data validation against the acceptance criteria (backtest, forecast, paper) |
+| `haftalik-degerlendirme` | Weekly review: what worked, what didn't, rule breaches, lessons |
+
+### Live dashboard (inside the AI app)
+
+`open_dashboard` opens an interactive panel **inside the chat** on MCP Apps hosts (Claude Desktop / claude.ai, Cursor, VS Code): macro · TL · commodity strip, watchlist with PA verdicts, TradingView chart with plan lines and the forecast band, KAP + news feed, risk and macro calendar. It refreshes itself (15/30/60 s), and its buttons (TV'de aç, Planı çiz, Risk kontrolü, Günlüğe ekle, Claude'a sor) run MCP tools. For hosts without inline UI (Codex, terminals) the same panel runs in a browser: the tool returns a `http://127.0.0.1:…/?t=…` link, or run `bist-trader-dashboard`. Design: [`docs/DASHBOARD_ARCHITECTURE.md`](docs/DASHBOARD_ARCHITECTURE.md).
+
+### Risk
+
+| Tool | Role |
+|------|-----|
+| `check_trade_risk` | Shares from equity × risk %, then portfolio checks: loss circuit breaker, max positions, total open risk (queued plans included), correlation cluster, liquidity, tavan/taban day, TCMB/CPI events |
+| `get_portfolio_risk` | Heat, pending plans, open P&L, realised P&L today/7d, breaker, correlated pairs, 1-day 95% VaR |
+| `get_risk_config` / `set_risk_config` | Equity, % risk per trade, caps and loss limits (`BIST_RISK_CONFIG`) |
+
+The daily pipeline and the dashboard's "Günlüğe ekle" run every plan through `check_trade_risk` first.
+
+### Simple views (start here)
+
+| Tool | Role |
+|------|-----|
+| `forecast_next_candles` | "30 possible futures": reads the last 360 candles, draws the next 24 one at a time, 30 times. Returns Up %/Down %, mean forecast, lowest→highest run range, volatility amplification, a Turkish summary and a dark HTML chart (`html_path`) |
+| `get_simple_price_action` | Price action in ~10 fields: trend, nearest support/resistance, last break, cheap/expensive zone, **AL / SAT / BEKLE** + at most one plan (entry/stop/target/R:R) |
+
+### Measure (is it actually right?)
+
+| Tool | Role |
+|------|-----|
+| `backtest_price_action` | Walk-forward test of the AL/SAT plans on one symbol: signals from past bars only, stop wins ties, results in R after costs (win rate, expectancy, profit factor, drawdown) + which confluence factors to keep/drop |
+| `backtest_price_action_universe` | Same over many symbols (default ≈BIST30), pooled — the sample size you need before trusting a factor |
+| `evaluate_forecast_accuracy` | Does the forecast band hold? p10–p90 coverage (target ~80%), direction hit rate, band width |
+
+### Learn & run daily
+
+| Tool | Role |
+|------|-----|
+| `backtest_price_action_universe(save_weights=true)` | Learns which confluence factors to silence/boost and each setup type's track record. Fits on the first 2/3 of every symbol's history, checks the last 1/3, and only activates the weights if out-of-sample expectancy did not get worse |
+| `run_daily_pipeline` | After the close: replays earlier plans on new bars (planned → open → closed in R), scans the universe, ranks plans (forecast agreement → setup track record → R:R), logs the top N to the trade journal, stores daily prices, writes a dashboard HTML. Also a CLI for Task Scheduler / cron: `bist-trader-daily --top 5` |
+| `get_network_stats` | HTTP requests per host, retries, coalesced duplicates, disk-cache size, cached TradingView bar sets; `prune_cache=true` cleans expired files |
+
+Live analysis (`get_simple_price_action`) uses the saved weights automatically: dropped factors no longer score, and a setup type with a proven negative record (≥ 20 trades) is downgraded to **BEKLE**. Backtests always measure the unweighted engine unless asked otherwise.
+
+**Paths / env:** `BIST_PA_WEIGHTS` (weights JSON), `BIST_TRADE_JOURNAL` (journal JSON), `BIST_FORECAST_DIR` (HTML output), `BIST_PANEL_DB` (price panel), `BIST_HTTP_PER_HOST` (parallel requests per host, default 4), `BIST_RISK_CONFIG` (risk settings), `BIST_DASHBOARD_PORT` (local panel, default 8765), `BIST_WORKERS` (processes for universe backtests).
+
+### Tool profiles (context cost)
+
+Every tool's description and schema is sent to the model on each request. Pick a smaller set with `BIST_TOOL_PROFILE` in the MCP server's `env`:
+
+| Profile | Tools | ≈ tokens per request | Contents |
+|---|---|---|---|
+| `core` | 21 | 3.6k | Simple PA, forecast, risk, dashboard, daily pipeline, backtests, journal, news/KAP |
+| `trader` | 49 | 8.2k | core + detailed PA/Elliott/scenario, TradingView, market data, valuation |
+| `full` (default) | 113 | 17.2k | everything |
+
+Add single tools to any profile with `BIST_TOOLS_EXTRA=get_viop_iv_surface,get_yield_curve`.
+
+### Company valuation
+
+`value_company` values a company in one call and shows where every input came from (`user` / `kap` / `yahoo` / `derived` / `default`); your values always win over auto-fill.
+
+- **Industrials:** driver-based FCFF DCF — revenue growth (fading to terminal) → EBIT margin → NOPAT − (capex − D&A + ΔNWC); mid-year discounting; terminal value with the value-driver formula (RONIC defaults to WACC, the conservative "growth adds no value" case); full bridge to equity (debt, cash, minorities, non-operating assets). Plus a WACC × g sensitivity grid, bear/base/bull scenarios, a Monte Carlo value distribution with P(value > price), and a DDM when dividends are paid.
+- **Banks** (auto for AKBNK, GARAN, ISCTR, YKBNK, HALKB, VAKBN… or `model="bank"`): residual income + justified P/B — FCFF is meaningless for a lender.
+- **Relative:** peer median P/E, P/B, P/S, EV/EBITDA, EV/Sales (tickers or your own numbers).
+- **Cost of capital:** CAPM on your `risk_free` (TL: 10Y DİBS) with a beta estimated vs XU100 (Blume-adjusted, `estimate_equity_beta`), ERP (default 5.5%, an assumption), optional country and size premia, market-value weights.
+- **High inflation:** pass `expected_inflation` → terminal growth = 2% real + inflation, and sanity checks flag nominal/real mixes, a terminal value above 85% of EV, a thin WACC − g spread or negative terminal FCFF.
+
+Auto-fill with `symbol` reads the KAP annual statements (see below; Yahoo's statements are the fallback), the price, and price history for beta. TMS 29 restatements can make years before FY2023 non-comparable. The risk-free rate is not fetched automatically: pass `risk_free` or `wacc`.
+
+```
+value_company(symbol="THYAO", risk_free=0.30, expected_inflation=0.25)
+value_company(symbol="GARAN", risk_free=0.30)                     # bank model
+value_company(revenue0=100e9, revenue_growth=0.4, ebit_margin=0.12, wacc=0.33,
+              expected_inflation=0.25, shares_outstanding=1e9, price=100)
+```
+
+### KAP financial statements (point-in-time)
+
+`get_kap_financials(symbol, as_of=None)` pulls the statements filed with KAP (via İş Yatırım's MaliTablo service) and stores them in the local panel DB (`BIST_PANEL_DB`). It then returns the annual figures that were **public on `as_of`**, plus the full CFO analysis: ratios, DuPont, Piotroski, Altman, Beneish and a selection score.
+
+- **When a row counts as known:** from the KAP publish date. If that date is not available, from the legal filing deadline (consolidated: Q1/9M +40, H1 +60, annual +70 days), so a backtest is never early.
+- **TMS 29:** non-bank rows from FY2023 on are flagged as inflation-adjusted. Banks were exempt, so their rows are not flagged. A note warns when the current and prior years are not comparable.
+- **Matching:** line items are matched by their Turkish/English description, not by code. Interim periods are cumulative, so only the annual rows feed the history.
+- **Offline use:** `refresh=false` reads only the local DB.
+
+```
+get_kap_financials(symbol="THYAO")                      # today
+get_kap_financials(symbol="THYAO", as_of="2024-06-01")  # what was known then
+```
+
+### Company events
+
+`get_company_events` gives each company's **earnings window** from the SPK filing deadlines (Q1/9M: 30 days standalone / 40 consolidated after period end; H1: 50/60; annual: 60/70) — refined by KAP when available (already reported → window closed) — plus recent corporate actions from KAP (financial report, general assembly, dividend, capital increase / bonus issue, buyback). `check_trade_risk` warns when a report can land overnight: for the whole window if KAP shows no report yet, otherwise in the last 14 days before the deadline (most companies publish late). The dashboard calendar lists the deadlines. Banks (BDDK) often report earlier; treat the window as a risk flag, not a date prediction.
+
+### Paper account
+
+Every plan logged by `run_daily_pipeline` or the dashboard's "Günlüğe ekle" is replayed on real bars each evening (fill window, stop wins ties, gaps, max hold) — no orders are placed. `get_paper_account` turns that into a TL account: equity from `equity` in the risk config, return, max drawdown, open positions marked to the last close, stats in R, and a **live vs backtest** check against the out-of-sample expectancy saved by `backtest_price_action_universe(save_weights=true)`. Rule of thumb built in: after 20+ trades, live expectancy should be at least half the backtest before real money is considered.
+
+### Alerts (Telegram)
+
+1. Create a bot with [@BotFather](https://t.me/BotFather), send it a message, get your chat id.
+2. Add to the MCP server `env`: `BIST_TELEGRAM_BOT_TOKEN`, `BIST_TELEGRAM_CHAT_ID`; check with `send_test_alert`.
+3. `run_daily_pipeline` sends fills, stops, targets, cancellations and new picks; `check_alerts` (or the `bist-trader-alerts` CLI every 15–30 min) warns when an open trade is within 0.3R of its stop and on material KAP news for your symbols.
+
+Every alert is sent once and also kept in a local outbox (`get_alerts`, `BIST_ALERTS_FILE`), so nothing is lost without Telegram. The bot token never appears in results, errors or logs.
+
+### Reliability
+
+- **Long runs:** `start_job(kind="backtest_universe", args={...})` returns a `job_id` at once; poll `get_job`. Use it for 30+ symbols or the daily pipeline so the host's tool timeout never cuts them off.
+- **Timeouts:** every tool call is capped (`BIST_TOOL_TIMEOUT`, default 120 s; backtests/pipeline 5–15 min) and errors come back as `{error, detail, tool}`.
+- **Responsiveness:** synchronous tools run off the event loop (one worker, so TradingView commands stay in order); multi-step TradingView sequences hold a lock so two tools never mix symbols on the single chart.
+- **Journal safety:** journal/config writes are atomic and file-locked across processes (MCP server + `bist-trader-daily` at the same time); a damaged journal is backed up as `*.corrupt-<time>` instead of being overwritten.
+- **Input checks:** symbols, timeframes and prices are validated before they reach Yahoo/Binance URLs or the TradingView CLI.
+- **Observability:** `get_network_stats` → per-tool calls / errors / avg & max latency; logs go to stderr (`BIST_LOG_LEVEL`) and optionally a rotating file (`BIST_LOG_FILE`).
+
+The analysis tools take `symbol` + `timeframe` (TradingView labels: `60`, `240`, `1D`…) and pull bars **from the TradingView chart** (`data_source="auto"`); if TradingView Desktop is not reachable they fall back to Binance (crypto) or split-adjusted Yahoo daily bars (BIST). Raw `closes/highs/lows/opens` arrays also work. The forecast is model-free (block bootstrap of recent candle shapes, volatility-regime scaled) — a spread of plausible paths, not a signal.
+
+------|-----|
+| `forecast_next_candles` | "30 possible futures": reads the last 360 candles, draws the next 24 one at a time, 30 times. Returns Up %/Down %, mean forecast, lowest→highest run range, volatility amplification, a Turkish summary and a dark HTML chart (`html_path`) |
+| `get_simple_price_action` | Price action in ~10 fields: trend, nearest support/resistance, last break, cheap/expensive zone, **AL / SAT / BEKLE** + at most one plan (entry/stop/target/R:R) |
+
+Both accept `symbol` (BIST ticker or crypto pair) or raw `closes/highs/lows/opens` arrays. The forecast is model-free (block bootstrap of recent candle shapes, volatility-regime scaled) — a spread of plausible paths, not a signal.
 
 ---
 
@@ -313,10 +445,12 @@ cd bist-trader-mcp
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -e ".[dev]"
-pytest -q                              # 304 tests
+pytest -q                              # ~600 tests
 $env:TCMB_EVDS_API_KEY = "your-key"   # For EVDS-dependent tools
 python -m bist_trader_mcp              # stdio MCP server (for testing)
 ```
+
+CI installs from the hashed lock files (`requirements-ci.txt`, `requirements-e2e.txt`, wheels only) and imports the package from `src/`. Each file's header shows the `uv pip compile` command that regenerates it after a dependency change.
 
 For EVDS key (free registration): https://evds3.tcmb.gov.tr/
 

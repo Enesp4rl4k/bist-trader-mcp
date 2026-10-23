@@ -9,15 +9,27 @@ adding new tools trivial (just define a function and decorate it).
 
 from __future__ import annotations
 
+import asyncio
+import contextvars
+import inspect
 import json
+import math
+import os
+import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from mcp.server import Server
+from mcp.server.lowlevel.helper_types import ReadResourceContents
 from mcp.server.stdio import stdio_server
-from mcp.types import TextContent
+from mcp.types import CallToolResult, TextContent
 
 from .http_utils import close_shared_client
+from .jobs import get_job, start_job
+from .telemetry import record, setup_logging
+from .tool_profiles import active_profile, enabled_tools, is_enabled
 from .tools import (
+    DASHBOARD_URI,
     aggregate_portfolio_greeks,
     analyze_chart_scenarios,
     analyze_elliott_wave,
@@ -29,6 +41,8 @@ from .tools import (
     analyze_swing_trade,
     apply_scenario_to_chart,
     apply_trade_to_chart,
+    backtest_price_action,
+    backtest_price_action_universe,
     backtest_strategy,
     calculate_atr_position_size,
     calculate_basis_fair_value,
@@ -44,18 +58,27 @@ from .tools import (
     calculate_realized_vol,
     calculate_rolling_correlation,
     calculate_technicals,
+    check_alerts,
+    check_trade_risk,
+    dashboard_action,
+    dashboard_snapshot,
     design_from_price_action,
     design_ltf_trade_plan,
     design_mtf_trade_plan,
     design_scenario_trade_plan,
     design_trade_setup,
+    estimate_equity_beta,
+    evaluate_forecast_accuracy,
     evaluate_signal_accuracy,
     find_viop_spread_opportunities,
     fit_yield_curve_nss,
+    forecast_next_candles,
+    get_alerts,
     get_bist_eod_ohlcv,
     get_bist_sector_rotation,
     get_bist_snapshot,
     get_btc_network_stats,
+    get_company_events,
     get_crypto_fear_greed,
     get_crypto_funding_rates,
     get_crypto_klines,
@@ -73,11 +96,17 @@ from .tools import (
     get_global_pulse,
     get_health_status,
     get_kap_disclosures,
+    get_kap_financials,
     get_market_profile,
     get_market_summary,
     get_mkk_market_stats,
+    get_network_stats,
     get_news_headlines,
+    get_paper_account,
+    get_portfolio_risk,
     get_repo_curve,
+    get_risk_config,
+    get_simple_price_action,
     get_tcmb_policy_rates,
     get_trade_playbook_rules,
     get_turib_endeks_overview,
@@ -96,17 +125,21 @@ from .tools import (
     list_trade_journal,
     log_trade_plan,
     monitor_open_trades,
+    open_dashboard,
     optimize_portfolio_markowitz,
     pine_payload_from_trade_plan,
     portfolio_risk_check,
     rank_equity_universe,
     render_pine_recipe,
+    run_daily_pipeline,
     run_market_assistant,
     run_scenario_assistant,
     run_trade_assistant,
     scan_mtf_watchlist,
     scan_price_action_watchlist,
     screen_equity_universe,
+    send_test_alert,
+    set_risk_config,
     simulate_option_strategy,
     stress_test_portfolio,
     tv_chart_set_symbol,
@@ -116,6 +149,7 @@ from .tools import (
     tv_health_check,
     update_trade_status,
     validate_trade_consistency,
+    value_company,
     value_equity_dcf,
 )
 
@@ -136,12 +170,23 @@ def _register(
     description: str,
     input_schema: dict[str, Any],
     handler: Any,
+    meta: dict[str, Any] | None = None,
+    structured: bool = False,
+    timeout: float | None = None,
 ) -> None:
-    """Internal helper to register a tool for dispatch."""
+    """Internal helper to register a tool for dispatch.
+
+    ``meta`` becomes the tool's ``_meta`` (MCP Apps: ``{"ui": {...}}``);
+    ``structured=True`` returns the dict as ``structuredContent`` (what an MCP
+    App view reads) with its ``summary_tr`` as the text content.
+    """
     TOOL_REGISTRY[name] = {
         "description": description,
         "inputSchema": input_schema,
         "handler": handler,
+        "meta": meta,
+        "structured": structured,
+        "timeout": timeout,
     }
 
 
@@ -1660,6 +1705,394 @@ _register(
     ),
 )
 
+# --- Simple views (start here) ---------------------------------------------
+
+_OHLC_PROPS = {
+    "symbol": {
+        "type": "string",
+        "description": "THYAO, XU030 or BINANCE:BTCUSDT; bars come from TradingView",
+    },
+    "timeframe": {"type": "string", "default": "1D", "description": "15, 60, 240, 1D, 1W"},
+    "data_source": {
+        "type": "string",
+        "enum": ["auto", "tradingview", "public"],
+        "default": "auto",
+        "description": "auto: TradingView, else Yahoo/Binance",
+    },
+    "closes": {"type": "array", "items": {"type": "number"}},
+    "highs": {"type": "array", "items": {"type": "number"}},
+    "lows": {"type": "array", "items": {"type": "number"}},
+    "opens": {"type": "array", "items": {"type": "number"}},
+}
+
+_register(
+    "forecast_next_candles",
+    description=(
+        "SIMPLE: '30 possible futures' candle forecast (Kronos-style view). Reads the "
+        "last `context` candles, draws the next `horizon` candles one at a time, "
+        "`n_paths` times. Returns Up%/Down% (runs ending above/below last close), "
+        "mean forecast, lowest→highest run range, volatility amplification and a "
+        "Turkish summary; saves a dark HTML chart (html_path). Pass a symbol or OHLC "
+        "arrays. Probability spread, not a signal."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            **_OHLC_PROPS,
+            "horizon": {"type": "integer", "default": 24},
+            "n_paths": {"type": "integer", "default": 30},
+            "context": {"type": "integer", "default": 360},
+            "seed": {"type": "integer"},
+            "drift": {"type": "string", "enum": ["historical", "zero"], "default": "historical"},
+            "save_html": {"type": "boolean", "default": True},
+            "include_paths": {"type": "boolean", "default": False},
+        },
+    },
+    handler=lambda args: forecast_next_candles(
+        closes=args.get("closes"),
+        highs=args.get("highs"),
+        lows=args.get("lows"),
+        opens=args.get("opens"),
+        symbol=args.get("symbol"),
+        timeframe=args.get("timeframe") or args.get("interval") or "1D",
+        data_source=args.get("data_source", "auto"),
+        horizon=int(args.get("horizon", 24)),
+        n_paths=int(args.get("n_paths", 30)),
+        context=int(args.get("context", 360)),
+        seed=args.get("seed"),
+        drift=args.get("drift", "historical"),
+        save_html=bool(args.get("save_html", True)),
+        include_paths=bool(args.get("include_paths", False)),
+    ),
+)
+
+_register(
+    "get_simple_price_action",
+    description=(
+        "SIMPLE: plain-language price action in ~10 fields — trend (yükseliş/düşüş/"
+        "yatay), nearest support & resistance with distance %, last break event, "
+        "cheap/expensive zone, verdict AL/SAT/BEKLE with one-line reason and at most "
+        "one plan (entry/stop/target/R:R). Use this first; use analyze_price_action "
+        "only when the full FVG/OB/sweep detail is needed."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            **_OHLC_PROPS,
+            "min_rr": {"type": "number", "default": 1.5},
+        },
+    },
+    handler=lambda args: get_simple_price_action(
+        closes=args.get("closes"),
+        highs=args.get("highs"),
+        lows=args.get("lows"),
+        opens=args.get("opens"),
+        symbol=args.get("symbol"),
+        timeframe=args.get("timeframe") or args.get("interval") or "1D",
+        data_source=args.get("data_source", "auto"),
+        min_rr=float(args.get("min_rr", 1.5)),
+    ),
+)
+
+_BT_PROPS = {
+    "bars": {"type": "integer", "default": 500, "description": "History length (TV max 500)"},
+    "max_hold": {"type": "integer", "default": 20, "description": "Bars before timeout exit"},
+    "min_rr": {"type": "number", "default": 1.5},
+    "cost_pct": {
+        "type": "number",
+        "default": 0.002,
+        "description": "One-way cost (commission+slippage) as fraction of price",
+    },
+}
+
+_register(
+    "run_daily_pipeline",
+    description=(
+        "DAILY LOOP: scan a universe (default ≈BIST30) with simple PA + candle "
+        "forecast on TradingView bars, rank plans (forecast agreement, learned setup "
+        "track record, R:R, confluence), log the top N to the trade journal, replay "
+        "earlier pipeline plans on new bars (planned → open → closed in R, stop wins "
+        "ties), store daily prices in the panel DB, and write an HTML dashboard. "
+        "Run once after the close; also available as the `bist-trader-daily` CLI."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "symbols": {"type": "array", "items": {"type": "string"}},
+            "timeframe": _OHLC_PROPS["timeframe"],
+            "data_source": _OHLC_PROPS["data_source"],
+            "top_n": {"type": "integer", "default": 5},
+            "min_rr": {"type": "number", "default": 1.5},
+            "max_hold": {"type": "integer", "default": 20},
+            "log_to_journal": {"type": "boolean", "default": True},
+            "save_html": {"type": "boolean", "default": True},
+        },
+    },
+    handler=lambda args: run_daily_pipeline(
+        symbols=args.get("symbols"),
+        timeframe=args.get("timeframe") or "1D",
+        data_source=args.get("data_source", "auto"),
+        top_n=int(args.get("top_n", 5)),
+        min_rr=float(args.get("min_rr", 1.5)),
+        max_hold=int(args.get("max_hold", 20)),
+        log_to_journal=bool(args.get("log_to_journal", True)),
+        save_html=bool(args.get("save_html", True)),
+    ),
+)
+
+_RISK_FIELDS = {
+    "equity": {"type": "number", "description": "Account size (TL)"},
+    "risk_per_trade_pct": {"type": "number", "description": "Stop risk per trade, % equity"},
+    "max_open_risk_pct": {"type": "number", "description": "Cap on total open stop risk"},
+    "max_positions": {"type": "integer"},
+    "max_cluster_positions": {"type": "integer",
+                              "description": "Max open trades that move together"},
+    "cluster_corr": {"type": "number", "description": "Correlation that defines a cluster"},
+    "daily_loss_limit_pct": {"type": "number"},
+    "weekly_loss_limit_pct": {"type": "number"},
+    "max_adv_pct": {"type": "number",
+                    "description": "Max position value as % of 20-day avg traded value"},
+    "event_blackout_days": {"type": "integer"},
+    "lot_size": {"type": "integer"},
+}
+
+_register(
+    "get_risk_config",
+    description="RISK: current risk settings (equity, % risk per trade, caps, loss limits).",
+    input_schema={"type": "object", "properties": {}},
+    handler=lambda args: get_risk_config(),
+)
+
+_register(
+    "set_risk_config",
+    description=(
+        "RISK: update risk settings (only the fields you pass change). Used by position "
+        "sizing, check_trade_risk, the daily pipeline and the dashboard."
+    ),
+    input_schema={"type": "object", "properties": _RISK_FIELDS},
+    handler=lambda args: set_risk_config(**{k: args.get(k) for k in _RISK_FIELDS}),
+)
+
+_register(
+    "check_trade_risk",
+    description=(
+        "RISK: size a trade (shares from equity × risk %) and run portfolio checks: "
+        "geometry, daily/weekly loss circuit breaker, duplicate, max positions, total "
+        "open risk, correlation cluster, liquidity vs 20-day traded value, tavan/taban "
+        "day, upcoming TCMB/CPI events. Returns approved + quantity + reasons."
+    ),
+    input_schema={
+        "type": "object",
+        "required": ["symbol", "direction", "entry", "stop"],
+        "properties": {
+            "symbol": {"type": "string"},
+            "direction": {"type": "string", "enum": ["long", "short"]},
+            "entry": {"type": "number"},
+            "stop": {"type": "number"},
+            "target": {"type": "number"},
+        },
+    },
+    handler=lambda args: check_trade_risk(
+        symbol=args["symbol"], direction=args["direction"],
+        entry=float(args["entry"]), stop=float(args["stop"]),
+        target=args.get("target"),
+    ),
+)
+
+_register(
+    "get_portfolio_risk",
+    description=(
+        "RISK: portfolio heat (open stop risk %), pending plans, positions with open P&L, "
+        "realised P&L today / 7 days, circuit breaker state, correlated pairs, 1-day 95% "
+        "historical VaR. Positions come from the trade journal."
+    ),
+    input_schema={"type": "object", "properties": {}},
+    handler=lambda args: get_portfolio_risk(),
+)
+
+_DASH_UI = {"resourceUri": DASHBOARD_URI}
+_DASH_META_MODEL = {"ui": {**_DASH_UI, "visibility": ["model", "app"]},
+                    "ui/resourceUri": DASHBOARD_URI}
+_DASH_META_APP = {"ui": {**_DASH_UI, "visibility": ["app"]}, "ui/resourceUri": DASHBOARD_URI}
+
+_register(
+    "open_dashboard",
+    description=(
+        "DASHBOARD: open the live, interactive BIST Trader panel inside the chat (MCP "
+        "Apps hosts: Claude, Cursor, VS Code…): macro/TL/commodity strip, watchlist with "
+        "PA verdicts, TradingView chart with plan + forecast band, KAP + news feed, risk "
+        "and macro calendar. The user picks symbol/timeframe/panels and presses buttons "
+        "(TV'de aç, Planı çiz, Risk kontrolü, Günlüğe ekle). Also returns a local browser "
+        "URL for hosts without inline UI (Codex, terminals)."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "symbol": {"type": "string", "description": "Initially selected symbol"},
+            "timeframe": {"type": "string", "enum": ["15", "60", "240", "1D", "1W"]},
+            "watchlist": {"type": "array", "items": {"type": "string"}},
+        },
+    },
+    handler=lambda args: open_dashboard(
+        symbol=args.get("symbol"), timeframe=args.get("timeframe"),
+        watchlist=args.get("watchlist"),
+    ),
+    meta=_DASH_META_MODEL,
+    structured=True,
+)
+
+_register(
+    "dashboard_snapshot",
+    description="Dashboard-internal: refresh data for the open panel (called by the UI).",
+    input_schema={
+        "type": "object",
+        "properties": {"state": {"type": "object"}},
+    },
+    handler=lambda args: dashboard_snapshot(args.get("state")),
+    meta=_DASH_META_APP,
+    structured=True,
+)
+
+_register(
+    "dashboard_action",
+    description=(
+        "Dashboard-internal: panel buttons — tv_open, value, tv_draw_plan, risk_check, "
+        "journal_add (called by the UI)."
+    ),
+    input_schema={
+        "type": "object",
+        "required": ["action", "symbol"],
+        "properties": {
+            "action": {"type": "string",
+                       "enum": ["tv_open", "value", "tv_draw_plan", "risk_check",
+                                "journal_add"]},
+            "symbol": {"type": "string"},
+            "timeframe": {"type": "string"},
+            "plan": {"type": "object"},
+        },
+    },
+    handler=lambda args: dashboard_action(
+        action=args["action"], symbol=args["symbol"],
+        timeframe=args.get("timeframe") or "1D", plan=args.get("plan"),
+    ),
+    meta=_DASH_META_APP,
+    structured=True,
+    timeout=180,
+)
+
+_register(
+    "get_network_stats",
+    description=(
+        "Diagnostics: HTTP request counts per host, retries, coalesced duplicate "
+        "requests, fail-fast 4xx, errors per source, disk cache size and cached "
+        "TradingView bar sets. `prune_cache=true` deletes expired cache files."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {"prune_cache": {"type": "boolean", "default": False}},
+    },
+    handler=lambda args: get_network_stats(prune_cache=bool(args.get("prune_cache", False))),
+)
+
+_register(
+    "backtest_price_action",
+    description=(
+        "MEASURE: walk-forward backtest of get_simple_price_action AL/SAT plans on one "
+        "symbol (TradingView bars by default). Signals use only past bars (no "
+        "look-ahead); stop wins when stop and target share a bar; results in R after "
+        "costs: win rate, expectancy, profit factor, max drawdown, by direction/trend/"
+        "setup, plus factor attribution (which confluence factors to keep/drop and "
+        "whether the confluence score ranks outcomes)."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            **_OHLC_PROPS,
+            **_BT_PROPS,
+            "include_trades": {"type": "boolean", "default": False},
+        },
+    },
+    handler=lambda args: backtest_price_action(
+        closes=args.get("closes"),
+        highs=args.get("highs"),
+        lows=args.get("lows"),
+        opens=args.get("opens"),
+        symbol=args.get("symbol"),
+        timeframe=args.get("timeframe") or "1D",
+        data_source=args.get("data_source", "auto"),
+        bars=int(args.get("bars", 500)),
+        max_hold=int(args.get("max_hold", 20)),
+        min_rr=float(args.get("min_rr", 1.5)),
+        cost_pct=float(args.get("cost_pct", 0.002)),
+        include_trades=bool(args.get("include_trades", False)),
+    ),
+)
+
+_register(
+    "backtest_price_action_universe",
+    description=(
+        "MEASURE: backtest_price_action over a list of symbols (default ≈BIST30), "
+        "one at a time on the TradingView chart, pooling all trades: pooled win "
+        "rate/expectancy, per-symbol table, and pooled factor keep/drop list. "
+        "save_weights=true learns factor weights + setup track records and saves them "
+        "for live analysis; they become active only if they did not worsen an "
+        "out-of-sample check (fit on first 2/3 of history, tested on the rest)."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "symbols": {"type": "array", "items": {"type": "string"}},
+            "timeframe": _OHLC_PROPS["timeframe"],
+            "data_source": _OHLC_PROPS["data_source"],
+            **_BT_PROPS,
+            "save_weights": {"type": "boolean", "default": False},
+        },
+    },
+    handler=lambda args: backtest_price_action_universe(
+        symbols=args.get("symbols"),
+        save_weights=bool(args.get("save_weights", False)),
+        timeframe=args.get("timeframe") or "1D",
+        data_source=args.get("data_source", "auto"),
+        bars=int(args.get("bars", 500)),
+        max_hold=int(args.get("max_hold", 20)),
+        min_rr=float(args.get("min_rr", 1.5)),
+        cost_pct=float(args.get("cost_pct", 0.002)),
+    ),
+)
+
+_register(
+    "evaluate_forecast_accuracy",
+    description=(
+        "MEASURE: walk-forward calibration of forecast_next_candles. At past points it "
+        "forecasts from prior bars only and checks the close `horizon` bars later: "
+        "p10–p90 coverage (target ~80%), full band coverage, direction hit rate and "
+        "band width. Tells whether to trust the band and/or the Up/Down %."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            **_OHLC_PROPS,
+            "bars": {"type": "integer", "default": 500},
+            "horizon": {"type": "integer", "default": 24},
+            "n_paths": {"type": "integer", "default": 30},
+            "step": {"type": "integer", "default": 10},
+        },
+    },
+    handler=lambda args: evaluate_forecast_accuracy(
+        closes=args.get("closes"),
+        highs=args.get("highs"),
+        lows=args.get("lows"),
+        opens=args.get("opens"),
+        symbol=args.get("symbol"),
+        timeframe=args.get("timeframe") or "1D",
+        data_source=args.get("data_source", "auto"),
+        bars=int(args.get("bars", 500)),
+        horizon=int(args.get("horizon", 24)),
+        n_paths=int(args.get("n_paths", 30)),
+        step=int(args.get("step", 10)),
+    ),
+)
+
 # --- Price action + position design (v0.9) --------------------------------
 
 _register(
@@ -1681,6 +2114,12 @@ _register(
             "lows": {"type": "array", "items": {"type": "number"}},
             "swing_lookback": {"type": "integer", "default": 5},
             "sr_tolerance_pct": {"type": "number", "default": 0.003},
+            "detail": {
+                "type": "boolean",
+                "default": False,
+                "description": "Include raw OB/breaker lists and duplicated panels "
+                "(~2x larger output).",
+            },
         },
     },
     handler=lambda args: analyze_price_action(
@@ -1689,6 +2128,7 @@ _register(
         lows=args.get("lows") or [],
         swing_lookback=int(args.get("swing_lookback", 5)),
         sr_tolerance_pct=float(args.get("sr_tolerance_pct", 0.003)),
+        detail=bool(args.get("detail", False)),
     ),
 )
 
@@ -2923,6 +3363,214 @@ _register(
 )
 
 
+# --- Company valuation --------------------------------------------------------
+
+_NUM = {"type": "number"}
+_NUM_OR_PATH = {"oneOf": [{"type": "number"}, {"type": "array", "items": {"type": "number"}}]}
+
+_register(
+    "value_company",
+    description=(
+        "VALUATION: full company valuation in one call. Industrials: driver-based FCFF "
+        "DCF (revenue growth → EBIT margin → NOPAT − reinvestment, mid-year, value-driver "
+        "terminal) + WACC×g sensitivity + bear/base/bull scenarios + Monte Carlo "
+        "(P(value > price)) + DDM. Banks (auto for AKBNK/GARAN/…, or model='bank'): "
+        "residual income + justified P/B. Optional peer multiples. Returns a football-"
+        "field blend, margin of safety, sanity checks (incl. nominal/real TL mismatch) "
+        "and the source of every input. With `symbol`, history/price/beta are auto-filled "
+        "(KAP statements, Yahoo fallback; your values always win). Needs `risk_free` (TL: 10Y DİBS, "
+        "decimal) or `wacc`. Rates are decimals."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "symbol": {"type": "string"},
+            "model": {"type": "string", "enum": ["auto", "industrial", "bank"]},
+            "autofill": {"type": "boolean", "default": True},
+            "price": _NUM,
+            "risk_free": {**_NUM, "description": "TL 10Y DİBS yield for TL valuations"},
+            "wacc": {**_NUM, "description": "Skip the CAPM build (banks: cost of equity)"},
+            "equity_risk_premium": {**_NUM, "description": "Default 0.055 (assumption)"},
+            "country_risk_premium": {**_NUM, "description": "Only on a mature-market rf"},
+            "beta": {**_NUM, "description": "Default: estimated vs XU100 (Blume)"},
+            "pre_tax_cost_of_debt": _NUM,
+            "expected_inflation": {**_NUM, "description": "Sets nominal terminal growth "
+                                   "= 2% real + inflation and checks consistency"},
+            "revenue0": _NUM,
+            "revenue_growth": {**_NUM_OR_PATH, "description": "Number or per-year list"},
+            "growth_fade_to": {**_NUM, "description": "Default: terminal growth"},
+            "ebit_margin": _NUM_OR_PATH,
+            "margin_fade_to": _NUM,
+            "years": {"type": "integer", "default": 10},
+            "tax_rate": _NUM,
+            "da_pct_revenue": _NUM,
+            "capex_pct_revenue": _NUM,
+            "nwc_pct_revenue": _NUM,
+            "terminal_growth": _NUM,
+            "terminal_roic": {**_NUM, "description": "Default = WACC (growth adds no value)"},
+            "debt": _NUM, "cash": _NUM, "minority_interest": _NUM,
+            "non_operating_assets": _NUM, "shares_outstanding": _NUM,
+            "book_value": _NUM, "roe": _NUM_OR_PATH, "payout": _NUM,
+            "dividend_per_share": _NUM,
+            "peers": {"type": "array", "description": "Tickers, or {ticker, pe, pb, ps, "
+                      "ev_ebitda} objects", "items": {}},
+            "run_monte_carlo": {"type": "boolean", "default": True},
+        },
+    },
+    handler=lambda args: value_company(**args),
+    timeout=180,
+)
+
+_register(
+    "get_kap_financials",
+    description=(
+        "FUNDAMENTALS: official KAP statements (via İş Yatırım) stored point-in-time in "
+        "the local panel DB, then the annual figures that were public on `as_of` "
+        "(default today) + CFO analysis (ratios, Piotroski, Altman, Beneish, growth, "
+        "selection score). Rows count as known from the KAP publish date, else the "
+        "legal filing deadline — safe for backtests. value_company uses the same data."
+    ),
+    input_schema={
+        "type": "object",
+        "required": ["symbol"],
+        "properties": {
+            "symbol": {"type": "string"},
+            "as_of": {"type": "string", "description": "YYYY-MM-DD; default today"},
+            "years": {"type": "integer", "default": 5},
+            "refresh": {"type": "boolean", "default": True,
+                        "description": "false: read the local DB only (no network)"},
+            "analyze": {"type": "boolean", "default": True},
+        },
+    },
+    handler=lambda args: get_kap_financials(
+        args["symbol"], args.get("as_of"), int(args.get("years") or 5),
+        bool(args.get("refresh", True)), bool(args.get("analyze", True))),
+    timeout=120,
+)
+
+_register(
+    "estimate_equity_beta",
+    description=(
+        "VALUATION: equity beta vs an index (default XU100) from ~2 years of daily prices; "
+        "OLS with Blume adjustment, R² and standard error."
+    ),
+    input_schema={
+        "type": "object",
+        "required": ["symbol"],
+        "properties": {"symbol": {"type": "string"}, "index": {"type": "string"},
+                       "blume": {"type": "boolean", "default": True}},
+    },
+    handler=lambda args: estimate_equity_beta(
+        args["symbol"], args.get("index") or "XU100", bool(args.get("blume", True))),
+)
+
+
+# --- Company events ---------------------------------------------------------
+
+_register(
+    "get_company_events",
+    description=(
+        "EVENTS: per company — earnings window from SPK filing deadlines (Q1/9M 30/40 "
+        "days, H1 50/60, annual 60/70; standalone/consolidated), refined by KAP when "
+        "available (already reported?), plus recent corporate actions from KAP "
+        "(financial report, general assembly, dividend, capital increase/bonus, buyback). "
+        "Default symbols: open/planned trades. check_trade_risk uses the same data."
+    ),
+    input_schema={"type": "object",
+                  "properties": {"symbols": {"type": "array", "items": {"type": "string"}}}},
+    handler=lambda args: get_company_events(args.get("symbols")),
+)
+
+# --- Paper account ----------------------------------------------------------
+
+_register(
+    "get_paper_account",
+    description=(
+        "PAPER: simulated TL account of every daily-pipeline and dashboard plan, replayed "
+        "on real bars (no orders): equity, return %, max drawdown, open positions marked "
+        "to market, stats in R, and live-vs-backtest check (live expectancy should be at "
+        "least half the out-of-sample backtest before risking real money)."
+    ),
+    input_schema={"type": "object", "properties": {}},
+    handler=lambda args: get_paper_account(),
+)
+
+# --- Alerts -----------------------------------------------------------------
+
+_register(
+    "check_alerts",
+    description=(
+        "ALERTS: intraday check — open trades near their stop (≤0.3R, delayed quotes) and "
+        "material KAP disclosures for held/planned symbols. New alerts go to a local "
+        "outbox and to Telegram when BIST_TELEGRAM_BOT_TOKEN/CHAT_ID are set; each alert "
+        "is sent once. Fill/stop/target alerts come from run_daily_pipeline."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "send": {"type": "boolean", "default": True},
+            "near_stop_r": {"type": "number", "default": 0.3},
+        },
+    },
+    handler=lambda args: check_alerts(
+        send=bool(args.get("send", True)), near_stop_r=float(args.get("near_stop_r", 0.3))
+    ),
+)
+
+_register(
+    "get_alerts",
+    description="ALERTS: most recent alerts from the local outbox (newest first).",
+    input_schema={"type": "object", "properties": {"limit": {"type": "integer", "default": 50}}},
+    handler=lambda args: get_alerts(int(args.get("limit", 50))),
+)
+
+_register(
+    "send_test_alert",
+    description="ALERTS: send one Telegram test message to verify the bot token / chat id.",
+    input_schema={"type": "object", "properties": {}},
+    handler=lambda args: send_test_alert(),
+)
+
+# --- Background jobs --------------------------------------------------------
+
+_register(
+    "start_job",
+    description=(
+        "Run a long task in the background and return a job_id immediately — use for "
+        "universe backtests (30+ symbols) and the daily pipeline, which can outlast "
+        "the host's tool timeout. kind: backtest_universe | backtest | daily_pipeline | "
+        "forecast_accuracy; args: the same arguments as that tool. Poll with get_job."
+    ),
+    input_schema={
+        "type": "object",
+        "required": ["kind"],
+        "properties": {
+            "kind": {"type": "string", "enum": ["backtest_universe", "backtest",
+                                                 "daily_pipeline", "forecast_accuracy"]},
+            "args": {"type": "object"},
+        },
+    },
+    handler=lambda args: start_job(args["kind"], args.get("args")),
+)
+
+_register(
+    "get_job",
+    description="Status of a background job (result included once finished); no id = list.",
+    input_schema={"type": "object", "properties": {"job_id": {"type": "string"}}},
+    handler=lambda args: get_job(args.get("job_id")),
+)
+
+# Tools that legitimately run for minutes (default limit: BIST_TOOL_TIMEOUT, 120 s).
+for _name, _secs in {
+    "backtest_price_action_universe": 900, "run_daily_pipeline": 900,
+    "backtest_price_action": 300, "evaluate_forecast_accuracy": 300,
+    "run_market_assistant": 300, "run_scenario_assistant": 300,
+    "apply_scenario_to_chart": 300, "run_trade_assistant": 300,
+}.items():
+    if _name in TOOL_REGISTRY:
+        TOOL_REGISTRY[_name]["timeout"] = _secs
+
+
 # ---------------------------------------------------------------------------
 # MCP protocol handlers
 # ---------------------------------------------------------------------------
@@ -2935,32 +3583,123 @@ async def _list_tools() -> list[Tool]:
     return [
         Tool(
             name=name,
-            description=info["description"],
-            inputSchema=info["inputSchema"],
+            description=TOOL_REGISTRY[name]["description"],
+            inputSchema=TOOL_REGISTRY[name]["inputSchema"],
+            _meta=TOOL_REGISTRY[name].get("meta"),
         )
-        for name, info in TOOL_REGISTRY.items()
+        for name in enabled_tools(list(TOOL_REGISTRY))
     ]
 
 
 @server.call_tool()
-async def _call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
+async def _call_tool(
+    name: str, arguments: dict[str, Any]
+) -> list[TextContent] | CallToolResult:
     arguments = arguments or {}
-    try:
-        entry = TOOL_REGISTRY.get(name)
-        if entry is None:
-            result = {"error": "unknown_tool", "detail": name}
-        else:
-            handler = entry["handler"]
-            result = handler(arguments)
-            # If handler returns a coroutine, await it
-            if hasattr(result, "__await__"):
-                result = await result
-    except KeyError as e:
-        result = {"error": "missing_argument", "detail": str(e)}
-    except Exception as e:  # surface unexpected errors as structured payload
-        result = {"error": "tool_failed", "detail": f"{type(e).__name__}: {e}"}
+    entry = TOOL_REGISTRY.get(name)
+    t0 = time.perf_counter()
+    if entry is None:
+        result: Any = {"error": "unknown_tool", "detail": name}
+    elif not is_enabled(name, list(TOOL_REGISTRY)):
+        result = {
+            "error": "tool_disabled",
+            "detail": f"{name} is not in tool profile '{active_profile()}' "
+                      "(set BIST_TOOL_PROFILE=full or add it via BIST_TOOLS_EXTRA)",
+        }
+        entry = None
+    else:
+        timeout = float(entry.get("timeout") or DEFAULT_TOOL_TIMEOUT)
+        try:
+            result = await asyncio.wait_for(_invoke(entry, arguments), timeout)
+        except asyncio.TimeoutError:
+            result = {"error": "timeout",
+                      "detail": f"{name} did not finish within {timeout:.0f}s"
+                                + (" — use start_job for long runs" if timeout < 600 else "")}
+        except KeyError as e:
+            result = {"error": "missing_argument", "detail": str(e)}
+        except Exception as e:  # surface unexpected errors as structured payload
+            result = {"error": "tool_failed", "detail": f"{type(e).__name__}: {e}"}
 
-    return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, default=str))]
+    failed = isinstance(result, dict) and bool(result.get("error"))
+    if failed:
+        result.setdefault("tool", name)
+    record(name, (time.perf_counter() - t0) * 1000, not failed,
+           result.get("detail") if failed else None)
+    if entry and entry.get("structured") and isinstance(result, dict):
+        return structured_result(result)
+    return [TextContent(type="text", text=encode_result(result))]
+
+
+DEFAULT_TOOL_TIMEOUT = float(os.environ.get("BIST_TOOL_TIMEOUT", "120"))
+# One worker: legacy synchronous tools drive TradingView (one chart, sleeps,
+# subprocesses) and were always serialised; they now run off the event loop
+# so the panel and async tools stay responsive.
+_SYNC_TOOLS = ThreadPoolExecutor(max_workers=1, thread_name_prefix="bist-sync-tool")
+
+
+def _is_async_handler(entry: dict[str, Any]) -> bool:
+    """Registry handlers are lambdas calling one tool function by its global name."""
+    cached = entry.get("_is_async")
+    if cached is None:
+        code = getattr(entry["handler"], "__code__", None)
+        names = code.co_names if code else ()
+        cached = any(inspect.iscoroutinefunction(globals().get(n)) for n in names)
+        entry["_is_async"] = cached
+    return cached
+
+
+async def _invoke(entry: dict[str, Any], arguments: dict[str, Any]) -> Any:
+    handler = entry["handler"]
+    if _is_async_handler(entry):
+        result = handler(arguments)
+    else:
+        ctx = contextvars.copy_context()
+        result = await asyncio.get_running_loop().run_in_executor(
+            _SYNC_TOOLS, ctx.run, handler, arguments
+        )
+    if hasattr(result, "__await__"):
+        result = await result
+    return result
+
+
+def structured_result(result: dict[str, Any]) -> CallToolResult:
+    """Text for the model + full payload as structuredContent for the view."""
+    compact = _compact_numbers(result)
+    if result.get("error"):
+        return CallToolResult(
+            content=[TextContent(type="text", text=encode_result(result))],
+            structuredContent=compact,
+            isError=True,
+        )
+    text = result.get("summary_tr") or "Panel verisi güncellendi."
+    return CallToolResult(
+        content=[TextContent(type="text", text=str(text))],
+        structuredContent=compact,
+    )
+
+
+def _compact_numbers(x: Any) -> Any:
+    """Trim float noise (113.92720399182 → 113.9272) to save LLM context tokens.
+
+    |x| >= 1000 keeps 2 decimals (prices like BTC stay exact to the cent);
+    smaller values keep 6 significant digits (enough for FX pips and tiny coins).
+    """
+    if isinstance(x, float):
+        if not math.isfinite(x):  # NaN / ±inf are not valid JSON
+            return None
+        return round(x, 2) if abs(x) >= 1000 else float(f"{x:.6g}")
+    if isinstance(x, dict):
+        return {k: _compact_numbers(v) for k, v in x.items()}
+    if isinstance(x, (list, tuple)):
+        return [_compact_numbers(v) for v in x]
+    return x
+
+
+def encode_result(result: Any) -> str:
+    """JSON for the MCP client: compact separators + trimmed floats."""
+    return json.dumps(
+        _compact_numbers(result), ensure_ascii=False, default=str, separators=(",", ":")
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2977,7 +3716,16 @@ from mcp.types import (  # noqa: E402
 )
 from pydantic import AnyUrl  # noqa: E402
 
+UI_MIME = "text/html;profile=mcp-app"
+UI_RESOURCE_META = {"ui": {"prefersBorder": False}}
+
 RESOURCES = [
+    {
+        "uri": DASHBOARD_URI,
+        "name": "BIST Trader live dashboard",
+        "description": "Interactive panel (MCP Apps view) used by open_dashboard.",
+        "mimeType": UI_MIME,
+    },
     {
         "uri": "bist-trader://catalog/evds-series",
         "name": "EVDS series catalog",
@@ -3016,14 +3764,22 @@ async def _list_resources() -> list[Resource]:
             name=r["name"],
             description=r["description"],
             mimeType=r["mimeType"],
+            _meta=UI_RESOURCE_META if r["mimeType"] == UI_MIME else None,
         )
         for r in RESOURCES
     ]
 
 
 @server.read_resource()
-async def _read_resource(uri: AnyUrl) -> str:
+async def _read_resource(uri: AnyUrl) -> str | list[ReadResourceContents]:
     uri_s = str(uri)
+    if uri_s == DASHBOARD_URI:
+        from .dashboard_web import dashboard_html
+
+        # No csp domains: the view never reaches the internet itself — all data
+        # comes through tools/call, so the host's strictest default applies.
+        return [ReadResourceContents(content=dashboard_html(), mime_type=UI_MIME,
+                                     meta=UI_RESOURCE_META)]
     if uri_s == "bist-trader://catalog/evds-series":
         return json.dumps(list_catalog(), ensure_ascii=False, indent=2)
     if uri_s == "bist-trader://catalog/pine-recipes":
@@ -3374,6 +4130,17 @@ PROMPTS_REGISTRY: dict[str, dict[str, Any]] = {
     },
 }
 
+# Guided workflows for the daily loop (analysis → risk → journal → review).
+from .workflows import WORKFLOWS  # noqa: E402
+
+for _wname, _wf in WORKFLOWS.items():
+    PROMPTS_REGISTRY[_wname] = {
+        "description": _wf["description"],
+        "arguments": [PromptArgument(name=n, description=d, required=r)
+                      for n, d, r in _wf["arguments"]],
+        "render": _wf["render"],
+    }
+
 
 @server.list_prompts()
 async def _list_prompts() -> list[Prompt]:
@@ -3405,6 +4172,7 @@ async def _get_prompt(name: str, arguments: dict[str, Any] | None = None) -> Get
 
 
 async def run() -> None:
+    setup_logging()
     try:
         async with stdio_server() as (read_stream, write_stream):
             await server.run(

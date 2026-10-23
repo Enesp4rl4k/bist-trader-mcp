@@ -20,3 +20,6 @@ htmlcov/
 .DS_Store
 .idea/
 .vscode/
+
+# e2e screenshots (scripts/e2e_dashboard.py)
+dashboard_*.png

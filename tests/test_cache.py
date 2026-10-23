@@ -62,3 +62,13 @@ def test_cache_atomic_write_no_partial_files(tmp_path):
     cache_dir = _cache._cache_root()
     leftovers = list(cache_dir.glob("*.tmp"))
     assert not leftovers
+
+
+def test_cache_prune_removes_expired_and_corrupt(tmp_path: Path):
+    _cache.cache_set("fresh", 1, ttl_seconds=3600)
+    _cache.cache_set("old", 2, ttl_seconds=0)
+    (tmp_path / "bist-trader-mcp" / "broken.json").write_text("{not json")
+    out = _cache.cache_prune(grace_seconds=-1)
+    assert out == {"removed": 2, "kept": 1}
+    assert _cache.cache_get("fresh", ttl_seconds=3600) == 1
+    assert _cache.cache_stats()["entries"] == 1

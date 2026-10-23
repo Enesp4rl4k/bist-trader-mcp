@@ -370,7 +370,11 @@ def analyze_chart_scenarios(
     # Quick historical backtest metric integration
     backtest_metrics = None
     if len(ltf_closes) >= 30:
-        from .backtest import run_backtest, signal_from_sma_crossover, signal_from_bollinger_mean_reversion
+        from .backtest import (
+            run_backtest,
+            signal_from_bollinger_mean_reversion,
+            signal_from_sma_crossover,
+        )
         is_crypto = cfg.get("asset_class") == "crypto"
         if is_crypto:
             signals = signal_from_bollinger_mean_reversion(ltf_closes, period=20, std_dev=2.0)

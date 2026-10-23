@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .bist_calendar import filter_holiday_bars, is_bist_holiday, is_bist_half_day
+from .bist_calendar import filter_holiday_bars, is_bist_half_day, is_bist_holiday
 from .data_quality import _bar_hour_istanbul
 
 # BIST cash ~10:00–18:00 Istanbul; holidays via bist_calendar

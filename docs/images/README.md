@@ -9,9 +9,9 @@
 Regenerate (TradingView CDP on `:9222`):
 
 ```powershell
-C:\Users\parlak\Downloads\tradingview-mcp\scripts\launch_tv_debug.bat
-cd C:\Users\parlak\Downloads\tr-fixedincome-mcp
-$env:TRADINGVIEW_MCP_PATH = "C:\Users\parlak\Downloads\tradingview-mcp"
+%USERPROFILE%\Downloads\tradingview-mcp\scripts\launch_tv_debug.bat
+cd %USERPROFILE%\Downloads\bist-trader-mcp
+$env:TRADINGVIEW_MCP_PATH = "%USERPROFILE%\Downloads\tradingview-mcp"
 .venv\Scripts\python.exe scripts\capture_linkedin_screenshots.py
 ```
 

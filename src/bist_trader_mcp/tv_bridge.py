@@ -2,33 +2,65 @@
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 import subprocess
+import threading
 import time
 from pathlib import Path
 from typing import Any
 
-DEFAULT_TV_MCP = Path(r"C:\Users\parlak\Downloads\tradingview-mcp")
+# TradingView Desktop has ONE chart. A multi-step sequence (set symbol → set
+# timeframe → read bars / draw) must not interleave with another thread's
+# sequence, or a tool reads the other symbol's bars. Hold TV_LOCK around every
+# sequence; tv_call takes it too, so single commands are serialised as well.
+TV_LOCK = threading.RLock()
+
+
+def tv_sequence(fn):
+    """Run a multi-command TradingView sequence under TV_LOCK."""
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        with TV_LOCK:
+            return fn(*args, **kwargs)
+
+    return wrapper
+
+
+def tv_mcp_candidates() -> list[Path]:
+    """Where a tradingview-mcp checkout usually lives (first existing wins)."""
+    repo_parent = Path(__file__).resolve().parents[3]
+    home = Path.home()
+    return [
+        repo_parent / "tradingview-mcp",          # sibling of this repo
+        home / "tradingview-mcp",
+        home / "Downloads" / "tradingview-mcp",
+        home / "Documents" / "tradingview-mcp",
+    ]
 
 
 def tv_mcp_root() -> Path:
+    """``TRADINGVIEW_MCP_PATH`` if set, else the first existing default location."""
     env = os.environ.get("TRADINGVIEW_MCP_PATH")
     if env:
         return Path(env)
-    return DEFAULT_TV_MCP
+    candidates = tv_mcp_candidates()
+    return next((p for p in candidates if p.is_dir()), candidates[0])
 
 
 def tv_call(*args: str, timeout: int = 90) -> dict[str, Any]:
     root = tv_mcp_root()
-    proc = subprocess.run(
-        ["node", "src/cli/index.js", *args],
-        cwd=str(root),
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        check=False,
-    )
+    with TV_LOCK:
+        proc = subprocess.run(
+            ["node", "src/cli/index.js", *args],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
     raw = (proc.stdout or proc.stderr or "").strip()
     if not raw:
         return {
@@ -263,6 +295,7 @@ def _profit_level(plan: dict[str, Any]) -> float:
     return max(prices)
 
 
+@tv_sequence
 def apply_trade_plan_to_chart(
     plan: dict[str, Any],
     *,
@@ -495,6 +528,7 @@ def _closest_levels(
     return rows[:limit]
 
 
+@tv_sequence
 def apply_pa_overlay_to_chart(
     mtf: dict[str, Any],
     *,
@@ -505,23 +539,22 @@ def apply_pa_overlay_to_chart(
 ) -> dict[str, Any]:
     """Draw PA on chart: S/R horizontals + HTF/LTF structure label (LTF timeframe)."""
     from .chart_drawing_styles import (
-        PA_BANNER_TEXT,
-        PA_FVG_LINE,
+        PA_BOS_LINE,
+        PA_BREAKER_BEAR_BOX,
+        PA_BREAKER_BULL_BOX,
+        PA_CHOCH_LINE,
         PA_FVG_BOX,
+        PA_FVG_LINE,
+        PA_MSS_LINE,
+        PA_OB_BEAR_BOX,
+        PA_OB_BULL_BOX,
         PA_RANGE_HIGH,
         PA_RANGE_LOW,
         PA_RANGE_MID,
         PA_RESIST_LINE,
         PA_SUPPORT_LINE,
-        PA_OB_BULL_BOX,
-        PA_OB_BEAR_BOX,
-        PA_BREAKER_BULL_BOX,
-        PA_BREAKER_BEAR_BOX,
-        PA_BOS_LINE,
-        PA_CHOCH_LINE,
-        PA_MSS_LINE,
-        PA_SWING_OTE_BOX,
         PA_SWEEP_LINE,
+        PA_SWING_OTE_BOX,
         overrides_json,
     )
     from .tv_tools import tv_draw_horizontal_line, tv_draw_rectangle, tv_draw_text
@@ -532,8 +565,6 @@ def apply_pa_overlay_to_chart(
 
     t_anchor = int(ltf_times[-1]) if ltf_times else int(time.time())
     close = float(ltf_closes[-1]) if ltf_closes else 0.0
-    banner_y = _banner_anchor_price(ltf_highs, ltf_closes)
-
     out: dict[str, Any] = {"success": True, "levels": [], "labels": []}
 
     resistances = ltf_pa.get("resistance_levels") or []
@@ -615,7 +646,7 @@ def apply_pa_overlay_to_chart(
         )
         # Fallback to horizontal lines if rectangle drawing is not supported or failed
         if not res.get("success"):
-            for px, lbl in ((top, f"{label} top"), (bot, f"{label} bot")):
+            for px, _lbl in ((top, f"{label} top"), (bot, f"{label} bot")):
                 out["levels"].append(
                     tv_draw_horizontal_line(
                         t_anchor, px, overrides=overrides_json(PA_FVG_LINE)
@@ -655,7 +686,7 @@ def apply_pa_overlay_to_chart(
             overrides=overrides_json(style_dict),
         )
         if not res.get("success"):
-            for px, lbl in ((top, f"{label} top"), (bot, f"{label} bot")):
+            for px, _lbl in ((top, f"{label} top"), (bot, f"{label} bot")):
                 out["levels"].append(
                     tv_draw_horizontal_line(
                         t_anchor, px, overrides=overrides_json(style_dict)
@@ -796,6 +827,7 @@ def _ew_points_for_chart(
     return points[-6:] if len(points) > 6 else points
 
 
+@tv_sequence
 def apply_scenario_to_chart(
     scenario: dict[str, Any],
     *,
@@ -819,7 +851,7 @@ def apply_scenario_to_chart(
     chart_style: str = "full",
 ) -> dict[str, Any]:
     """Draw on LTF chart: EW (mapped from HTF indices) + PA + Long/Short position tool."""
-    from .chart_draw_coords import map_points_to_chart_times, points_drawable_on_chart
+    from .chart_draw_coords import points_drawable_on_chart
     from .chart_drawing_styles import EW_POINT_LABEL, EW_TREND_LINE, overrides_json
     from .tv_tools import (
         tv_chart_set_candles,
@@ -846,8 +878,6 @@ def apply_scenario_to_chart(
         time.sleep(2.0)
         results["steps"].append(tv_chart_set_candles())
         time.sleep(0.5)
-
-    chart_times = ltf_times if (draw_on_ltf and ltf_times) else bar_times
 
     # --- Elliott Wave: always use HTF coordinates (no LTF mapping) ---
     # EW is computed on HTF data, so HTF timestamps are the correct

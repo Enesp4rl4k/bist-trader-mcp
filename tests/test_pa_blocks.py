@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from bist_trader_mcp.pa_blocks import detect_order_blocks, build_block_panel
+from bist_trader_mcp.pa_blocks import build_block_panel, detect_order_blocks
 
 
 def test_detect_order_blocks_bullish():

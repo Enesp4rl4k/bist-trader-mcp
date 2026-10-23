@@ -41,8 +41,10 @@ def _sample_covariance(
     cov = [[0.0] * n for _ in range(n)]
     for i in range(n):
         for j in range(i, n):
-            ai = aligned[assets[i]]; aj = aligned[assets[j]]
-            mi = means[i]; mj = means[j]
+            ai = aligned[assets[i]]
+            aj = aligned[assets[j]]
+            mi = means[i]
+            mj = means[j]
             c = sum((ai[t] - mi) * (aj[t] - mj) for t in range(min_len))
             c /= (min_len - 1) if min_len > 1 else 1
             cov[i][j] = c

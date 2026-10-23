@@ -5,8 +5,8 @@ Bu doküman **tek MCP** (`bist-trader`) ile Claude/Cursor akışını anlatır. 
 ## Yapıldı ✅ (otomatik kuruldu)
 
 - ✅ Node.js 24.14 + npm 11.11 (zaten kuruluydu)
-- ✅ `bist-trader-mcp` kurulu — `C:\Users\parlak\Downloads\tr-fixedincome-mcp\`
-- ✅ `tradesdontlie/tradingview-mcp` klonlandı — `C:\Users\parlak\Downloads\tradingview-mcp\`
+- ✅ `bist-trader-mcp` kurulu — `%USERPROFILE%\Downloads\bist-trader-mcp\`
+- ✅ `tradesdontlie/tradingview-mcp` klonlandı — `%USERPROFILE%\Downloads\tradingview-mcp\`
 - ✅ npm install complete (tradingview-mcp CLI)
 - ✅ Cursor `.cursor/mcp.json` — yalnızca `bist-trader` (+ `TRADINGVIEW_MCP_PATH`)
 - ✅ `tv_*` proxy araçları + `run_trade_assistant` bist-trader içinde kayıtlı
@@ -26,7 +26,7 @@ Kur, hesabınla giriş yap. **Free hesap çalışır** ama bazı feature'lar (mu
 MCP TV'yi `localhost:9222` portundan kontrol ediyor. Bunun için TV'yi özel bir komutla başlatmalısın. Otomatik script hazır:
 
 ```powershell
-C:\Users\parlak\Downloads\tradingview-mcp\scripts\launch_tv_debug.bat
+%USERPROFILE%\Downloads\tradingview-mcp\scripts\launch_tv_debug.bat
 ```
 
 Bu script:
@@ -84,7 +84,7 @@ Claude şunları yapmalı:
 
 Genellikle path veya Python venv sorunu. Test:
 ```powershell
-C:\Users\parlak\Downloads\tr-fixedincome-mcp\.venv\Scripts\python.exe -m bist_trader_mcp --help
+%USERPROFILE%\Downloads\bist-trader-mcp\.venv\Scripts\python.exe -m bist_trader_mcp --help
 ```
 Komut hata verirse venv broken — `pip install -e ".[dev,browser]"` ile yeniden kur.
 
@@ -104,11 +104,11 @@ Beklenir. Cache içinden ikinci çağrı çalışır (5 dakika TTL). Veya 1-2 da
 
 | Şey | Yeri |
 |---|---|
-| Claude Desktop config | `C:\Users\parlak\AppData\Roaming\Claude\claude_desktop_config.json` |
+| Claude Desktop config | `%APPDATA%\Claude\claude_desktop_config.json` |
 | Config backup | `…\claude_desktop_config.json.backup_20260511_212352` |
-| bist-trader-mcp | `C:\Users\parlak\Downloads\tr-fixedincome-mcp\` |
-| tradingview-mcp | `C:\Users\parlak\Downloads\tradingview-mcp\` |
-| TV CDP launcher | `C:\Users\parlak\Downloads\tradingview-mcp\scripts\launch_tv_debug.bat` |
+| bist-trader-mcp | `%USERPROFILE%\Downloads\bist-trader-mcp\` |
+| tradingview-mcp | `%USERPROFILE%\Downloads\tradingview-mcp\` |
+| TV CDP launcher | `%USERPROFILE%\Downloads\tradingview-mcp\scripts\launch_tv_debug.bat` |
 | TCMB EVDS key (env'de) | `IoIJuWdAOb` (bist-trader env içinde) |
 
 ## Piyasa profilleri (BIST / VIOP / kripto)
@@ -134,7 +134,7 @@ Asistanlar (`run_scenario_assistant`, `run_trade_assistant`) timeframe vermeden 
       "command": "C:\\Users\\parlak\\Downloads\\tr-fixedincome-mcp\\.venv\\Scripts\\python.exe",
       "args": ["-m", "bist_trader_mcp"],
       "env": {
-        "TRADINGVIEW_MCP_PATH": "C:\\Users\\parlak\\Downloads\\tradingview-mcp"
+        "TRADINGVIEW_MCP_PATH": "C:\\path\\to\\tradingview-mcp"
       }
     }
   }

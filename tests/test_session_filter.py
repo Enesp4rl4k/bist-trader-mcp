@@ -35,6 +35,7 @@ def test_filter_keeps_session_bars():
 def test_filter_session_bars_half_day():
     from datetime import datetime
     from zoneinfo import ZoneInfo
+
     from bist_trader_mcp.bist_calendar import is_bist_half_day
 
     # 2026-10-28 is a known BIST half-day (Republic Day Eve)

@@ -17,7 +17,9 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-TV_MCP = Path(r"C:\Users\parlak\Downloads\tradingview-mcp")
+from bist_trader_mcp.tv_bridge import tv_mcp_root  # noqa: E402
+
+TV_MCP = tv_mcp_root()  # TRADINGVIEW_MCP_PATH or a default location
 PY = ROOT / ".venv" / "Scripts" / "python.exe"
 
 

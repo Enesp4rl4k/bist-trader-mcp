@@ -28,9 +28,39 @@ from __future__ import annotations
 import json
 import os
 import re
+from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+
+class LRUDict(OrderedDict):
+    """Dict capped at ``maxsize`` entries; the least recently used is dropped.
+
+    For in-memory caches that live as long as the MCP server (bars, quotes):
+    without a cap they grow with every symbol ever looked at.
+    """
+
+    def __init__(self, maxsize: int) -> None:
+        super().__init__()
+        self.maxsize = maxsize
+
+    def __getitem__(self, key: Any) -> Any:
+        value = super().__getitem__(key)
+        self.move_to_end(key)
+        return value
+
+    def get(self, key: Any, default: Any = None) -> Any:
+        if key in self:
+            return self[key]
+        return default
+
+    def __setitem__(self, key: Any, value: Any) -> None:
+        super().__setitem__(key, value)
+        self.move_to_end(key)
+        while len(self) > self.maxsize:
+            # not popitem(): on Python 3.10 it calls our __getitem__ mid-removal
+            super().__delitem__(next(iter(self)))
 
 
 def _cache_root() -> Path:
@@ -79,6 +109,10 @@ def cache_get(key: str, ttl_seconds: int) -> Any | None:
 
 def cache_set(key: str, value: Any, ttl_seconds: int) -> None:
     """Persist `value` to the cache file."""
+    global _pruned
+    if not _pruned:
+        _pruned = True
+        cache_prune()
     path = cache_path_for(key)
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -90,3 +124,49 @@ def cache_set(key: str, value: Any, ttl_seconds: int) -> None:
     with tmp.open("w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, default=str)
     os.replace(tmp, path)
+
+
+_pruned = False
+
+
+def cache_prune(grace_seconds: int = 24 * 3600) -> dict[str, int]:
+    """Delete entries whose TTL expired more than ``grace_seconds`` ago.
+
+    Keeps the cache directory from growing forever; runs automatically once per
+    process on the first ``cache_set``.
+    """
+    root = _cache_root()
+    removed = kept = 0
+    if not root.is_dir():
+        return {"removed": 0, "kept": 0}
+    now = datetime.now(timezone.utc)
+    for path in root.glob("*.json"):
+        try:
+            with path.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+            saved_at = datetime.fromisoformat(data["saved_at"])
+            if saved_at.tzinfo is None:
+                saved_at = saved_at.replace(tzinfo=timezone.utc)
+            age = (now - saved_at).total_seconds()
+            expired = age > int(data.get("ttl_seconds") or 0) + grace_seconds
+        except (OSError, ValueError, KeyError, TypeError):  # JSONDecodeError is a ValueError
+            expired = True  # unreadable / corrupt entry
+        if expired:
+            try:
+                path.unlink()
+                removed += 1
+            except OSError:
+                pass
+        else:
+            kept += 1
+    return {"removed": removed, "kept": kept}
+
+
+def cache_stats() -> dict[str, Any]:
+    root = _cache_root()
+    files = list(root.glob("*.json")) if root.is_dir() else []
+    return {
+        "path": str(root),
+        "entries": len(files),
+        "size_kb": round(sum(p.stat().st_size for p in files) / 1024, 1),
+    }

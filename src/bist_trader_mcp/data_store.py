@@ -132,12 +132,15 @@ class PanelStore:
 
     @contextmanager
     def _tx(self):
+        ok = False
         try:
             yield self._conn
-            self._conn.commit()
-        except Exception:
-            self._conn.rollback()
-            raise
+            ok = True
+        finally:
+            if ok:
+                self._conn.commit()
+            else:
+                self._conn.rollback()
 
     # -- writes (idempotent upserts) --------------------------------------
     def upsert_prices(self, rows: Iterable[dict[str, Any]]) -> int:
@@ -249,6 +252,14 @@ class PanelStore:
             args.append(statement)
         row = self._conn.execute(sql, args).fetchone()
         return dict(row) if row else None
+
+    def fundamental_rows(self, ticker: str, as_of: int | str) -> list[dict[str, Any]]:
+        """Every fundamental row for ``ticker`` that was public at ``as_of``."""
+        ts = as_of if isinstance(as_of, int) else _date_to_ts(as_of)
+        rows = self._conn.execute(
+            "SELECT * FROM fundamentals WHERE ticker=? AND known_at<=? "
+            "ORDER BY period_end, statement, line_item", (ticker, ts)).fetchall()
+        return [dict(r) for r in rows]
 
     def get_price_as_of(
         self, ticker: str, as_of: int | str,
